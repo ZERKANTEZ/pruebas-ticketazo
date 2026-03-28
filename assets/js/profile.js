@@ -1,0 +1,485 @@
+/**
+ * profile.js
+ * Módulo de perfil de usuario: favoritos, boletos con QR,
+ * reseñas recientes y gestión de tarjeta (organizador).
+ */
+
+const Profile = (() => {
+
+  // ─── State ────────────────────────────────────────────────
+  const state = {
+    liked: new Set(),       // IDs de eventos/tours con "me gusta"
+    tickets: [],            // Boletos comprados (mock)
+    registeredCard: null,   // { last4, brand, expiry } | null
+  };
+
+  // Mock tickets — en producción vendrían del backend
+  const MOCK_TICKETS = [
+    { id: 'T-8821', eventId: 'e1',  zone: 'vip',   purchaseDate: '2026-04-01', qrCode: 'TKZ-E1-VIP-8821-X9K2' },
+    { id: 'T-8822', eventId: 'e3',  zone: 'plata',  purchaseDate: '2026-04-03', qrCode: 'TKZ-E3-PLT-8822-M7R4' },
+    { id: 'T-8823', eventId: 'e4',  zone: 'oro',   purchaseDate: '2026-04-10', qrCode: 'TKZ-E4-ORO-8823-P2W6' },
+  ];
+
+  // ─── Likes ────────────────────────────────────────────────
+  function toggleLike(id, el) {
+    const isLiked = state.liked.has(id);
+    if (isLiked) {
+      state.liked.delete(id);
+    } else {
+      state.liked.add(id);
+    }
+
+    // Update all like buttons for this id on the page
+    document.querySelectorAll(`.like-btn[data-id="${id}"]`).forEach(btn => {
+      btn.classList.toggle('liked', !isLiked);
+      btn.setAttribute('aria-label', !isLiked ? 'Quitar de favoritos' : 'Agregar a favoritos');
+      btn.innerHTML = Icons.heart;
+    });
+
+    // Notify if not logged in
+    if (!Auth.isLoggedIn()) {
+      state.liked.delete(id);
+      document.querySelectorAll(`.like-btn[data-id="${id}"]`).forEach(btn => {
+        btn.classList.remove('liked');
+      });
+      Auth.openModal();
+    }
+  }
+
+  function isLiked(id) { return state.liked.has(id); }
+
+  // ─── Navigation ───────────────────────────────────────────
+  function open() {
+    if (!Auth.isLoggedIn()) { Auth.openModal(); return; }
+    render();
+    App.navigate('profile');
+  }
+
+  // ─── Main Render ──────────────────────────────────────────
+  function render() {
+    const sess = Auth.session();
+    const el   = document.getElementById('page-profile');
+    if (!el) return;
+
+    const isOrganizer = sess.role === 'organizer';
+    const initials    = sess.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+
+    const roleLabels = {
+      user:      { label: `<span style="display:inline-flex;vertical-align:text-bottom;margin-right:4px">${Icons.ticket}</span> Cliente`,            cls: 'user'      },
+      organizer: { label: `<span style="display:inline-flex;vertical-align:text-bottom;margin-right:4px">${Icons.star}</span> Organizador`,         cls: 'organizer' },
+      admin:     { label: `<span style="display:inline-flex;vertical-align:text-bottom;margin-right:4px">${Icons.filter}</span> Administrador`,        cls: 'admin'     },
+      treasurer: { label: `<span style="display:inline-flex;vertical-align:text-bottom;margin-right:4px">${Icons.lock}</span> Tesorero`,            cls: 'admin'     },
+    };
+    const roleInfo = roleLabels[sess.role] || roleLabels.user;
+
+    el.innerHTML = `
+      <div class="profile-wrap">
+
+        <!-- Header -->
+        <div class="profile-header">
+          <div class="profile-avatar">${initials}</div>
+          <div class="profile-info">
+            <div class="profile-name">${sess.name}</div>
+            <div id="profile-email-display" style="display:flex;align-items:center;gap:8px;margin-top:2px">
+              <span class="profile-email" id="profile-email-text">${sess.email}</span>
+              <button style="font-size:.68rem;color:var(--color-blue);background:none;border:none;cursor:pointer;font-weight:600;padding:0;font-family:var(--font-body)"
+                onclick="Profile.toggleEmailEdit()">Cambiar</button>
+            </div>
+            <div id="profile-email-edit" style="display:none;margin-top:6px">
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="email" id="new-email-input"
+                  style="background:rgba(0,0,0,.35);border:1px solid rgba(135,206,235,.3);border-radius:8px;padding:6px 10px;color:#fff;font-size:.8rem;outline:none;font-family:var(--font-body);width:220px;max-width:100%"
+                  placeholder="${sess.email}"/>
+                <button style="font-size:.75rem;font-weight:600;padding:6px 14px;border-radius:50px;background:linear-gradient(90deg,var(--color-blue),var(--color-purple));color:#fff;border:none;cursor:pointer;font-family:var(--font-body)"
+                  onclick="Profile.saveEmail()">Guardar</button>
+                <button style="font-size:.75rem;color:var(--text-muted);background:none;border:none;cursor:pointer;font-family:var(--font-body)"
+                  onclick="Profile.toggleEmailEdit()">Cancelar</button>
+              </div>
+            </div>
+            <div class="profile-role-badge profile-role-badge--${roleInfo.cls}" style="margin-top:8px">
+              ${roleInfo.label}
+            </div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="Auth.logout()" style="flex-shrink:0">
+            Cerrar Sesión
+          </button>
+        </div>
+
+        ${isOrganizer ? renderCardSection() : ''}
+        ${renderFavorites()}
+        ${!isOrganizer ? renderTickets(sess) : ''}
+        ${renderRecentReviews(sess.name)}
+      </div>`;
+
+    // Generate QR codes after DOM is ready
+    setTimeout(() => generateQRCodes(), 100);
+  }
+
+  // ─── Card Section (organizer) ─────────────────────────────
+  function renderCardSection() {
+    const card = state.registeredCard;
+
+    const warningHtml = !card ? `
+      <div class="no-card-warning">
+        <span><strong>Necesitas una tarjeta registrada</strong> para poder crear o publicar eventos en Ticketazo.</span>
+      </div>` : '';
+
+    const cardContent = card ? `
+      <div class="registered-card">
+        <div class="registered-card-left">
+          <div class="card-chip"></div>
+          <div>
+            <div class="card-number">•••• •••• •••• ${card.last4}</div>
+            <div class="card-brand">${card.brand} · Vence ${card.expiry}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="card-status-badge">Activa</span>
+          <button class="remove-card-btn" onclick="Profile.removeCard()">Eliminar</button>
+        </div>
+      </div>` : `
+      <div class="add-card-form">
+        <div class="add-card-title"><span style="display:inline-flex;vertical-align:middle;margin-right:6px">${Icons.close}</span> Agregar tarjeta</div>
+        <div class="add-card-grid">
+          <div class="add-card-full">
+            <label class="profile-input-label">Número de tarjeta</label>
+            <input class="profile-input" id="pc-num" type="text" placeholder="0000 0000 0000 0000"
+              maxlength="19" oninput="Profile.fmtCard(this)"/>
+          </div>
+          <div>
+            <label class="profile-input-label">Titular</label>
+            <input class="profile-input" id="pc-name" type="text" placeholder="Nombre en la tarjeta"/>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="profile-input-label">Vence</label>
+              <input class="profile-input" id="pc-exp" type="text" placeholder="MM/AA" maxlength="5" oninput="Profile.fmtExp(this)"/>
+            </div>
+            <div>
+              <label class="profile-input-label">CVC</label>
+              <input class="profile-input" id="pc-cvc" type="text" placeholder="•••" maxlength="4" oninput="this.value=this.value.replace(/\\D/g,'')"/>
+            </div>
+          </div>
+        </div>
+        <button class="save-card-btn" onclick="Profile.saveCard()">
+          <span style="display:inline-flex;vertical-align:bottom;margin-right:6px">${Icons.lock}</span> Guardar Tarjeta
+        </button>
+        <p style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center">
+          Tus datos están encriptados con SSL. No los almacenamos en texto plano.
+        </p>
+      </div>`;
+
+    return `
+      <div class="profile-section">
+        <div class="profile-section-header">
+          <div class="profile-section-title">
+            <div class="profile-section-icon icon--amber">${Icons.card}</div>
+            Método de Pago
+          </div>
+        </div>
+        <div class="card-reg-wrap">
+          ${warningHtml}
+          ${cardContent}
+        </div>
+      </div>`;
+  }
+
+  function saveCard() {
+    const num  = document.getElementById('pc-num')?.value.replace(/\s/g, '');
+    const name = document.getElementById('pc-name')?.value.trim();
+    const exp  = document.getElementById('pc-exp')?.value.trim();
+    const cvc  = document.getElementById('pc-cvc')?.value.trim();
+
+    if (num.length < 16 || !name || exp.length < 5 || cvc.length < 3) {
+      alert('Por favor completa todos los campos de la tarjeta.');
+      return;
+    }
+
+    // Detect brand from first digit
+    const brand = num[0] === '4' ? 'Visa' : num[0] === '5' ? 'Mastercard' : 'Tarjeta';
+
+    state.registeredCard = {
+      last4: num.slice(-4),
+      brand,
+      expiry: exp,
+    };
+
+    render(); // Re-render profile with card registered
+  }
+
+  function removeCard() {
+    if (!confirm('¿Estás seguro de que deseas eliminar esta tarjeta?')) return;
+    state.registeredCard = null;
+    render();
+  }
+
+  function hasCard() { return !!state.registeredCard; }
+
+  function fmtCard(el) {
+    el.value = el.value.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim();
+  }
+  function fmtExp(el) {
+    const c = el.value.replace(/\D/g, '').slice(0, 4);
+    el.value = c.length >= 3 ? c.slice(0, 2) + '/' + c.slice(2) : c;
+  }
+
+  // ─── Favorites ────────────────────────────────────────────
+  function renderFavorites() {
+    const likedIds    = [...state.liked];
+    const likedEvents = EVENTS.filter(e => likedIds.includes(e.id));
+
+    const content = likedEvents.length
+      ? `<div class="favorites-grid">
+          ${likedEvents.map(ev => `
+            <div class="fav-card" onclick="Pages.openEvent('${ev.id}')">
+              <div class="fav-img"><img src="${ev.image}" alt="${ev.title}" loading="lazy"/></div>
+              <div class="fav-info">
+                <div class="fav-title">${ev.title}</div>
+                <div class="fav-artist">${ev.artist}</div>
+                <div class="fav-date">${new Date(ev.date).toLocaleDateString('es-ES', {day:'numeric',month:'short',year:'numeric'})}</div>
+              </div>
+              <button class="fav-remove" onclick="event.stopPropagation(); Profile.toggleLike('${ev.id}', this); Profile.render();"
+                title="Quitar de favoritos">${Icons.close}</button>
+            </div>`).join('')}
+        </div>`
+      : `<div class="profile-empty">
+          <div class="profile-empty-icon">${Icons.heart}</div>
+          <div>Aún no tienes eventos favoritos.</div>
+          <div style="font-size:.78rem;margin-top:4px">Dale con el botón de corazón a los eventos que te gusten.</div>
+        </div>`;
+
+    return `
+      <div class="profile-section">
+        <div class="profile-section-header">
+          <div class="profile-section-title">
+            <div class="profile-section-icon icon--pink">${Icons.heart}</div>
+            Mis Favoritos
+          </div>
+          <span style="font-size:.82rem;color:var(--text-muted)">${likedEvents.length} evento${likedEvents.length !== 1 ? 's' : ''}</span>
+        </div>
+        ${content}
+      </div>`;
+  }
+
+  // ─── Tickets ──────────────────────────────────────────────
+  function renderTickets(sess) {
+    const tickets = ['user','client','organizer'].includes(Auth.session().role)
+      ? MOCK_TICKETS : [];
+
+    const content = tickets.length
+      ? `<div class="tickets-list">
+          ${tickets.map(t => {
+            const ev = EVENTS.find(e => e.id === t.eventId);
+            if (!ev) return '';
+            const d  = new Date(ev.date);
+            return `
+              <div class="ticket-card" id="tc-${t.id}">
+                <div class="ticket-top">
+                  <div class="ticket-event-img">
+                    <img src="${ev.image}" alt="${ev.title}" loading="lazy"/>
+                  </div>
+                  <div class="ticket-info">
+                    <div class="ticket-event-name">${ev.title}</div>
+                    <div class="ticket-meta">
+                      ${ev.venue}, ${ev.city}<br>
+                      ${d.toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'short', year:'numeric' })}
+                    </div>
+                    <span class="ticket-zone-badge zone--${t.zone.toLowerCase()}">${t.zone.toUpperCase()}</span>
+                  </div>
+                  <button class="ticket-qr-toggle" onclick="Profile.toggleQR('${t.id}')">
+                    Ver QR
+                  </button>
+                </div>
+                <div class="ticket-qr-section" id="qr-${t.id}">
+                  <div class="qr-canvas-wrap">
+                    <canvas id="qrc-${t.id}" width="120" height="120"></canvas>
+                  </div>
+                  <div class="ticket-qr-info">
+                    <div class="ticket-qr-code">${t.qrCode}</div>
+                    <div class="ticket-qr-hint">Muestra este código en la entrada</div>
+                    <div style="font-size:.7rem;color:var(--text-muted);margin-top:6px">
+                      Comprado el ${new Date(t.purchaseDate).toLocaleDateString('es-ES')}
+                    </div>
+                  </div>
+                </div>
+              </div>`;
+          }).join('')}
+        </div>`
+      : `<div class="profile-empty">
+          <div class="profile-empty-icon">${Icons.ticket}</div>
+          <div>Aún no tienes boletos.</div>
+          <div style="font-size:.78rem;margin-top:4px">Tus compras aparecerán aquí con su código QR.</div>
+        </div>`;
+
+    return `
+      <div class="profile-section">
+        <div class="profile-section-header">
+          <div class="profile-section-title">
+            <div class="profile-section-icon icon--blue">${Icons.ticket}</div>
+            Mis Boletos
+          </div>
+          <span style="font-size:.82rem;color:var(--text-muted)">${tickets.length} boleto${tickets.length !== 1 ? 's' : ''}</span>
+        </div>
+        ${content}
+      </div>`;
+  }
+
+  function toggleQR(ticketId) {
+    const section = document.getElementById(`qr-${ticketId}`);
+    const btn     = section?.previousElementSibling?.querySelector('.ticket-qr-toggle');
+    if (!section) return;
+
+    const isOpen = section.classList.toggle('open');
+    if (btn) btn.textContent = isOpen ? 'Ocultar QR' : 'Ver QR';
+
+    if (isOpen) {
+      const canvas = document.getElementById(`qrc-${ticketId}`);
+      if (canvas && !canvas.dataset.generated) {
+        const ticket = MOCK_TICKETS.find(t => t.id === ticketId);
+        if (ticket) drawQR(canvas, ticket.qrCode);
+        canvas.dataset.generated = 'true';
+      }
+    }
+  }
+
+  // ─── Recent Reviews ───────────────────────────────────────
+  function renderRecentReviews(userName) {
+    // Collect reviews authored by this user across all events
+    const myReviews = [];
+    EVENTS.forEach(ev => {
+      const all = (Pages.getReviewsCache(ev.id) || ev.reviews || []);
+      all.forEach(r => {
+        if (r.user === userName || r.user === 'Anónimo') {
+          myReviews.push({ ...r, eventId: ev.id, eventTitle: ev.title, eventImage: ev.image });
+        }
+      });
+    });
+
+    const recent = myReviews.slice(0, 5);
+
+    const content = recent.length
+      ? recent.map(r => `
+          <div class="profile-review-card" onclick="Pages.openEvent('${r.eventId}')">
+            <div class="profile-review-event-img">
+              <img src="${r.eventImage}" alt="${r.eventTitle}" loading="lazy"/>
+            </div>
+            <div class="profile-review-body">
+              <div class="profile-review-event">${r.eventTitle}</div>
+              <div class="profile-review-stars">
+                ${[1,2,3,4,5].map(i => `<span style="font-size:.72rem;color:${i<=r.rating?'#facc15':'#374151'}">${Icons.star}</span>`).join('')}
+              </div>
+              <div class="profile-review-text">${r.comment}</div>
+              <div class="profile-review-date">${r.date}</div>
+            </div>
+          </div>`).join('')
+      : `<div class="profile-empty">
+          <div class="profile-empty-icon">${Icons.message}</div>
+          <div>Aún no has escrito reseñas.</div>
+          <div style="font-size:.78rem;margin-top:4px">Tus reseñas aparecerán aquí.</div>
+        </div>`;
+
+    return `
+      <div class="profile-section">
+        <div class="profile-section-header">
+          <div class="profile-section-title">
+            <div class="profile-section-icon icon--purple">${Icons.message}</div>
+            Mis Reseñas Recientes
+          </div>
+          <span style="font-size:.82rem;color:var(--text-muted)">${recent.length} reseña${recent.length !== 1 ? 's' : ''}</span>
+        </div>
+        ${content}
+      </div>`;
+  }
+
+  // ─── QR Generator (canvas-based, no library needed) ──────
+  function drawQR(canvas, code) {
+    const ctx  = canvas.getContext('2d');
+    const size = 120;
+    const cell = 6;
+    const cols = Math.floor(size / cell);
+
+    // White background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#000000';
+
+    // Deterministic pseudo-random pattern from code string
+    const hash = (str) => {
+      let h = 0;
+      for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) - h) + str.charCodeAt(i);
+        h |= 0;
+      }
+      return Math.abs(h);
+    };
+
+    for (let r = 0; r < cols; r++) {
+      for (let c = 0; c < cols; c++) {
+        const seed = hash(`${code}-${r}-${c}`);
+        const draw = (seed % 3) !== 0; // ~66% filled
+        if (draw) ctx.fillRect(c * cell, r * cell, cell - 1, cell - 1);
+      }
+    }
+
+    // Position detection squares (3 corners)
+    const drawCorner = (x, y) => {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x, y, 21, 21);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x + 3, y + 3, 15, 15);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x + 6, y + 6, 9, 9);
+    };
+    drawCorner(0, 0);
+    drawCorner(size - 21, 0);
+    drawCorner(0, size - 21);
+  }
+
+  function generateQRCodes() {
+    MOCK_TICKETS.forEach(t => {
+      const canvas = document.getElementById(`qrc-${t.id}`);
+      if (canvas && !canvas.dataset.generated && document.getElementById(`qr-${t.id}`)?.classList.contains('open')) {
+        drawQR(canvas, t.qrCode);
+        canvas.dataset.generated = 'true';
+      }
+    });
+  }
+
+  // ─── Email Change ────────────────────────────────────────
+  function toggleEmailEdit() {
+    const display = document.getElementById('profile-email-display');
+    const edit    = document.getElementById('profile-email-edit');
+    if (!display || !edit) return;
+    const isShowing = edit.style.display !== 'none';
+    edit.style.display    = isShowing ? 'none'  : 'block';
+    display.style.display = isShowing ? 'flex'  : 'none';
+  }
+
+  function saveEmail() {
+    const input    = document.getElementById('new-email-input');
+    if (!input) return;
+    const newEmail = input.value.trim().toLowerCase();
+    if (!newEmail) { input.style.borderColor = 'rgba(248,113,113,.5)'; return; }
+    const allowed = /\@(gmail|hotmail|outlook)\.com$/i.test(newEmail);
+    if (!allowed) {
+      input.style.borderColor = 'rgba(248,113,113,.5)';
+      alert('Solo se permiten correos @gmail, @hotmail o @outlook.');
+      return;
+    }
+    // Update session object in place
+    const sess = Auth.session();
+    sess.email = newEmail;
+    render(); // Re-render profile with updated email
+  }
+
+    // ─── Public API ───────────────────────────────────────────
+  return {
+    open, render,
+    toggleEmailEdit, saveEmail,
+    toggleLike, isLiked,
+    toggleQR,
+    saveCard, removeCard, hasCard,
+    fmtCard, fmtExp,
+    getState: () => state,
+  };
+})();
