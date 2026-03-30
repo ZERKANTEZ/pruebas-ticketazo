@@ -3,7 +3,7 @@
  * Hero carousel con soporte touch/swipe y teclado.
  */
 
-const Carousel = (() => {
+window.Carousel = (() => {
   // ── State ──────────────────────────────
   let current  = 0;
   let timer    = null;

@@ -4,7 +4,7 @@
  * reseñas recientes y gestión de tarjeta (organizador).
  */
 
-const Profile = (() => {
+window.Profile = (() => {
 
   // ─── State ────────────────────────────────────────────────
   const state = {
@@ -20,20 +20,33 @@ const Profile = (() => {
     { id: 'T-8823', eventId: 'e4',  zone: 'oro',   purchaseDate: '2026-04-10', qrCode: 'TKZ-E4-ORO-8823-P2W6' },
   ];
 
+  function addTickets(eventId, zone, qty) {
+    for (let i = 0; i < qty; i++) {
+        const id = 'T-' + Math.floor(1000 + Math.random() * 9000);
+        MOCK_TICKETS.unshift({
+            id, eventId, zone,
+            purchaseDate: new Date().toISOString(),
+            qrCode: `TKZ-${eventId.toUpperCase()}-${zone.toUpperCase().replace(/\\s+/g,'').substring(0,3)}-${id}-${Math.random().toString(36).substring(2,6).toUpperCase()}`
+        });
+    }
+  }
+
   // ─── Likes ────────────────────────────────────────────────
   function toggleLike(id, el) {
     const isLiked = state.liked.has(id);
+    const newState = !isLiked; // el estado DESPUÉS del toggle
+
     if (isLiked) {
       state.liked.delete(id);
     } else {
       state.liked.add(id);
     }
 
-    // Update all like buttons for this id on the page
+    // Update all like buttons with the NEW state
     document.querySelectorAll(`.like-btn[data-id="${id}"]`).forEach(btn => {
-      btn.classList.toggle('liked', !isLiked);
-      btn.setAttribute('aria-label', !isLiked ? 'Quitar de favoritos' : 'Agregar a favoritos');
-      btn.innerHTML = Icons.heart;
+      btn.classList.toggle('liked', newState);
+      btn.setAttribute('aria-label', newState ? 'Quitar de favoritos' : 'Agregar a favoritos');
+      btn.innerHTML = newState ? Icons.heart : Icons.heartOutline;
     });
 
     // Notify if not logged in
@@ -41,6 +54,7 @@ const Profile = (() => {
       state.liked.delete(id);
       document.querySelectorAll(`.like-btn[data-id="${id}"]`).forEach(btn => {
         btn.classList.remove('liked');
+        btn.innerHTML = Icons.heartOutline;
       });
       Auth.openModal();
     }
@@ -62,7 +76,7 @@ const Profile = (() => {
     if (!el) return;
 
     const isOrganizer = sess.role === 'organizer';
-    const initials    = sess.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+    const avatarIcon  = Icons._icon('person', 36, '#fff');
 
     const roleLabels = {
       user:      { label: `<span style="display:inline-flex;vertical-align:text-bottom;margin-right:4px">${Icons.ticket}</span> Cliente`,            cls: 'user'      },
@@ -77,7 +91,7 @@ const Profile = (() => {
 
         <!-- Header -->
         <div class="profile-header">
-          <div class="profile-avatar">${initials}</div>
+          <div class="profile-avatar">${avatarIcon}</div>
           <div class="profile-info">
             <div class="profile-name">${sess.name}</div>
             <div id="profile-email-display" style="display:flex;align-items:center;gap:8px;margin-top:2px">
@@ -100,9 +114,6 @@ const Profile = (() => {
               ${roleInfo.label}
             </div>
           </div>
-          <button class="btn btn-outline btn-sm" onclick="Auth.logout()" style="flex-shrink:0">
-            Cerrar Sesión
-          </button>
         </div>
 
         ${isOrganizer ? renderCardSection() : ''}
@@ -121,7 +132,7 @@ const Profile = (() => {
 
     const warningHtml = !card ? `
       <div class="no-card-warning">
-        <span><strong>Necesitas una tarjeta registrada</strong> para poder crear o publicar eventos en Ticketazo.</span>
+        <span><strong>Necesitas una cuenta registrada</strong> para poder recibir los depósitos de tus ventas.</span>
       </div>` : '';
 
     const cardContent = card ? `
@@ -129,43 +140,36 @@ const Profile = (() => {
         <div class="registered-card-left">
           <div class="card-chip"></div>
           <div>
-            <div class="card-number">•••• •••• •••• ${card.last4}</div>
-            <div class="card-brand">${card.brand} · Vence ${card.expiry}</div>
+            <div class="card-number">${card.last4}</div>
+            <div class="card-brand">${card.brand} · ${card.holder}</div>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span class="card-status-badge">Activa</span>
+          <span class="card-status-badge">Activa para Depósitos</span>
           <button class="remove-card-btn" onclick="Profile.removeCard()">Eliminar</button>
         </div>
       </div>` : `
       <div class="add-card-form">
-        <div class="add-card-title"><span style="display:inline-flex;vertical-align:middle;margin-right:6px">${Icons.close}</span> Agregar tarjeta</div>
+        <div class="add-card-title"><span style="display:inline-flex;vertical-align:middle;margin-right:6px"><span class="material-symbols-outlined" style="font-size: 18px; vertical-align: middle;">account_balance</span></span> Cuenta Bancaria de Depósito</div>
         <div class="add-card-grid">
           <div class="add-card-full">
-            <label class="profile-input-label">Número de tarjeta</label>
-            <input class="profile-input" id="pc-num" type="text" placeholder="0000 0000 0000 0000"
-              maxlength="19" oninput="Profile.fmtCard(this)"/>
+            <label class="profile-input-label">Clave CLABE Interbancaria (18 dígitos)</label>
+            <input class="profile-input" id="pc-num" type="text" placeholder="000 000 0000000000 0" maxlength="22" oninput="Profile.fmtCard(this)"/>
           </div>
-          <div>
-            <label class="profile-input-label">Titular</label>
-            <input class="profile-input" id="pc-name" type="text" placeholder="Nombre en la tarjeta"/>
+          <div class="add-card-full">
+            <label class="profile-input-label">Nombre del Titular de la Cuenta</label>
+            <input class="profile-input" id="pc-name" type="text" placeholder="Como aparece en el banco"/>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div>
-              <label class="profile-input-label">Vence</label>
-              <input class="profile-input" id="pc-exp" type="text" placeholder="MM/AA" maxlength="5" oninput="Profile.fmtExp(this)"/>
-            </div>
-            <div>
-              <label class="profile-input-label">CVC</label>
-              <input class="profile-input" id="pc-cvc" type="text" placeholder="•••" maxlength="4" oninput="this.value=this.value.replace(/\\D/g,'')"/>
-            </div>
+          <div class="add-card-full">
+            <label class="profile-input-label">Banco</label>
+            <input class="profile-input" id="pc-bank" type="text" placeholder="Ej. BBVA, Santander, Banorte"/>
           </div>
         </div>
         <button class="save-card-btn" onclick="Profile.saveCard()">
-          <span style="display:inline-flex;vertical-align:bottom;margin-right:6px">${Icons.lock}</span> Guardar Tarjeta
+          <span style="display:inline-flex;vertical-align:bottom;margin-right:6px">${Icons.lock}</span> Guardar Cuenta Bancaria
         </button>
         <p style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center">
-          Tus datos están encriptados con SSL. No los almacenamos en texto plano.
+          Tus datos están encriptados. Los usaremos únicamente para transferir las ganancias de tus eventos.
         </p>
       </div>`;
 
@@ -173,8 +177,8 @@ const Profile = (() => {
       <div class="profile-section">
         <div class="profile-section-header">
           <div class="profile-section-title">
-            <div class="profile-section-icon icon--amber">${Icons.card}</div>
-            Método de Pago
+            <div class="profile-section-icon icon--amber"><span class="material-symbols-outlined" style="font-size: 18px; color: inherit; vertical-align: middle;">account_balance</span></div>
+            Datos para Depósitos
           </div>
         </div>
         <div class="card-reg-wrap">
@@ -187,21 +191,17 @@ const Profile = (() => {
   function saveCard() {
     const num  = document.getElementById('pc-num')?.value.replace(/\s/g, '');
     const name = document.getElementById('pc-name')?.value.trim();
-    const exp  = document.getElementById('pc-exp')?.value.trim();
-    const cvc  = document.getElementById('pc-cvc')?.value.trim();
+    const bank = document.getElementById('pc-bank')?.value.trim();
 
-    if (num.length < 16 || !name || exp.length < 5 || cvc.length < 3) {
-      alert('Por favor completa todos los campos de la tarjeta.');
+    if (num.length < 18 || !name || !bank) {
+      alert('Por favor completa todos los campos de la cuenta interbancaria (CLABE de 18 dígitos).');
       return;
     }
 
-    // Detect brand from first digit
-    const brand = num[0] === '4' ? 'Visa' : num[0] === '5' ? 'Mastercard' : 'Tarjeta';
-
     state.registeredCard = {
-      last4: num.slice(-4),
-      brand,
-      expiry: exp,
+      last4: 'CLABE terminada en ' + num.slice(-4),
+      brand: bank,
+      holder: name,
     };
 
     render(); // Re-render profile with card registered
@@ -216,7 +216,7 @@ const Profile = (() => {
   function hasCard() { return !!state.registeredCard; }
 
   function fmtCard(el) {
-    el.value = el.value.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim();
+    el.value = el.value.replace(/\D/g, '').slice(0, 18).replace(/(.{4})(?=\d)/g, '$1 ').trim();
   }
   function fmtExp(el) {
     const c = el.value.replace(/\D/g, '').slice(0, 4);
@@ -263,8 +263,7 @@ const Profile = (() => {
 
   // ─── Tickets ──────────────────────────────────────────────
   function renderTickets(sess) {
-    const tickets = ['user','client','organizer'].includes(Auth.session().role)
-      ? MOCK_TICKETS : [];
+    const tickets = Auth.session() ? MOCK_TICKETS : [];
 
     const content = tickets.length
       ? `<div class="tickets-list">
@@ -479,7 +478,7 @@ const Profile = (() => {
     toggleLike, isLiked,
     toggleQR,
     saveCard, removeCard, hasCard,
-    fmtCard, fmtExp,
+    fmtCard, fmtExp, addTickets,
     getState: () => state,
   };
 })();

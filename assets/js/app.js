@@ -1,7 +1,7 @@
 /**
  * app.js — Controlador principal.
  */
-const App = (() => {
+window.App = (() => {
   let _current = 'home';
   let _prev    = 'home';
 
@@ -40,6 +40,8 @@ const App = (() => {
     logged ? show('btn-logout') : hide('btn-logout');
     logged ? hide('mob-login')  : show('mob-login');
     logged ? show('mob-logout') : hide('mob-logout');
+
+    logged ? show('btn-home-nav') : hide('btn-home-nav');
 
     const navName = $('nav-username');
     if (navName) {

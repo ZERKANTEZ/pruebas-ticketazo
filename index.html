@@ -10,8 +10,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
 
-    <link rel="stylesheet" href="assets/css/variables.css"/>
+  <link rel="stylesheet" href="assets/css/variables.css"/>
   <link rel="stylesheet" href="assets/css/base.css"/>
   <link rel="stylesheet" href="assets/css/navbar.css"/>
   <link rel="stylesheet" href="assets/css/hero.css"/>
@@ -21,6 +22,7 @@
   <link rel="stylesheet" href="assets/css/profile.css"/>
   <link rel="stylesheet" href="assets/css/modal.css"/>
   <link rel="stylesheet" href="assets/css/dashboard.css"/>
+  <link rel="stylesheet" href="assets/css/checkout.css"/>
   <link rel="stylesheet" href="assets/css/footer.css"/>
 </head>
 <body>
@@ -32,7 +34,7 @@
       <span>Ticketazo</span>
     </a>
     <div class="nav-right" id="nav-right">
-      <span class="nav-link hidden" id="nav-tickets" onclick="App.navigate('home')">Inicio</span>
+      <button class="btn btn-ghost btn-sm hidden" id="btn-home-nav" onclick="App.navigate('home')">Volver al inicio</button>
       <button class="btn-nav-user hidden" id="nav-username" onclick="Profile.open()">Mi cuenta</button>
       <button class="btn btn-ghost btn-sm hidden" id="btn-dashboard" onclick="Zones.openDashboard()">Panel</button>
       <button class="btn btn-secondary btn-sm" id="btn-login" onclick="Auth.openModal()">Iniciar Sesión</button>
@@ -103,20 +105,20 @@
     <div class="search-bar" id="search-bar">
       <div class="search-inner">
         <div class="search-wrap" id="search-wrap">
-          <span class="search-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span>
+          <span class="search-icon"><span class="material-symbols-outlined" style="font-size: 18px; opacity: 0.6; vertical-align: middle;">search</span></span>
           <input class="search-input" id="search-input" type="search"
             placeholder="Buscar artistas, ciudades..."
             oninput="Search.handle(this.value)"
             onfocus="Search.showDropdown()"
             autocomplete="off" aria-label="Buscar eventos"/>
-          <button class="search-clear hidden" id="search-clear" onclick="Search.clear()" aria-label="Limpiar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+          <button class="search-clear hidden" id="search-clear" onclick="Search.clear()" aria-label="Limpiar"><span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle;">close</span></button>
           <div class="search-dropdown hidden" id="search-dropdown" role="listbox"></div>
         </div>
         <div class="filters-row" role="group">
           <button class="filter-btn active-all" id="f-all"   onclick="Grid.setFilter('all')">Todos</button>
-          <button class="filter-btn" id="f-top"              onclick="Grid.setFilter('bestSeller')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-flex;margin-right:4px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> Top Ventas</button>
-          <button class="filter-btn" id="f-rec"              onclick="Grid.setFilter('recommended')"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:inline-flex;margin-right:4px"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg> Recomendados</button>
-          <button class="filter-btn" id="f-cat"              onclick="Grid.toggleCats()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-flex;margin-right:4px"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg> Categoría</button>
+          <button class="filter-btn" id="f-top"              onclick="Grid.setFilter('bestSeller')"><span class="material-symbols-outlined" style="font-size: 16px; margin-right:4px; vertical-align: text-bottom;">leaderboard</span> Top Ventas</button>
+          <button class="filter-btn" id="f-rec"              onclick="Grid.setFilter('recommended')"><span class="material-symbols-outlined" style="font-size: 16px; margin-right:4px; vertical-align: text-bottom;">star</span> Recomendados</button>
+          <button class="filter-btn" id="f-cat"              onclick="Grid.toggleCats()"><span class="material-symbols-outlined" style="font-size: 16px; margin-right:4px; vertical-align: text-bottom;">filter_alt</span> Categoría</button>
         </div>
         <div class="cat-pills" id="cat-pills" role="group"></div>
       </div>
@@ -128,7 +130,7 @@
           <h2 class="section-title" id="grid-title">Eventos Destacados</h2>
           <p class="section-count" id="grid-count"></p>
         </div>
-        <button class="clear-btn hidden" id="clear-all-btn" onclick="Grid.clearAll()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Limpiar</button>
+        <button class="clear-btn hidden" id="clear-all-btn" onclick="Grid.clearAll()"><span class="material-symbols-outlined" style="font-size: 14px; margin-right:4px; vertical-align: middle;">close</span> Limpiar</button>
       </div>
       <div class="events-grid" id="events-grid"></div>
     </section>
@@ -234,59 +236,52 @@
   <div class="page" id="page-dashboard">
     <div class="db-shell">
 
-      <!-- SIDEBAR — flex-item fijo, 260px, siempre en el flujo -->
+      <!-- SIDEBAR -->
       <aside class="db-sidebar" id="db-sidebar">
-
-        <!-- Logo -->
         <div class="db-logo-row">
           <div class="db-logo-link" onclick="App.navigate('home')">
             <img src="assets/img/logo.png" alt="Logo" class="db-logo-img" />
             <div class="db-logo-text">Ticket<span>azo</span></div>
           </div>
-          <button class="db-close-btn" id="db-close-btn" onclick="Zones.closeSidebar()"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+          <button class="db-close-btn" id="db-close-btn" onclick="Zones.closeSidebar()">
+            <span class="material-symbols-outlined" style="font-size: 24px;">close</span>
+          </button>
         </div>
 
-        <!-- Label estático — siempre debajo del logo -->
         <div class="db-nav-label-static">Panel de Control</div>
-
-        <!-- Nav items — JS solo inyecta los botones, sin el label -->
         <nav class="db-nav" id="db-nav"></nav>
 
-        <!-- Usuario — flex-shrink:0, siempre pegado al fondo -->
-        <div class="db-user-block" id="db-user-block">
-          <!-- Contenido dinámico: Zones.buildUser() lo llena al login -->
-        </div>
-
+        <div class="db-user-block" id="db-user-block"></div>
       </aside>
 
       <!-- Overlay para mobile -->
       <div class="db-overlay" id="db-overlay" onclick="Zones.closeSidebar()"></div>
 
-      <!-- MAIN — flex:1, scroll independiente -->
+      <!-- MAIN -->
       <main class="db-main">
         <div class="db-topbar">
           <div class="db-topbar-left">
-            <button class="db-hamburger" onclick="Zones.openSidebar()"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg></button>
+            <button class="db-hamburger" onclick="Zones.openSidebar()">
+              <span class="material-symbols-outlined" style="font-size: 24px;">menu</span>
+            </button>
             <div class="db-topbar-title" id="db-topbar-title">Panel de Control</div>
+          </div>
+          <div class="db-topbar-right">
+            <button class="db-btn db-btn-secondary" style="font-size:0.8rem; padding:6px 14px;" onclick="App.navigate('home')">
+              <span class="material-symbols-outlined" style="font-size: 16px; margin-right: 4px; vertical-align: middle;">home</span> Volver al inicio
+            </button>
           </div>
         </div>
 
-        <!-- Contenido: los paneles se muestran/ocultan con JS -->
         <div class="db-content">
-
-          <!-- Organizador -->
           <div class="db-panel" id="panel-events"></div>
           <div class="db-panel" id="panel-new"></div>
-
-          <!-- Tesorero -->
           <div class="db-panel" id="panel-review"></div>
           <div class="db-panel" id="panel-sales"></div>
           <div class="db-panel" id="panel-payouts"></div>
+          <div class="db-panel" id="panel-promote"></div>
           <div class="db-panel" id="panel-refunds"></div>
-
-          <!-- Admin -->
           <div class="db-panel" id="panel-overview"></div>
-
         </div>
       </main>
 
@@ -298,7 +293,7 @@
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal-blob modal-blob--1"></div>
       <div class="modal-blob modal-blob--2"></div>
-      <button class="modal-close" onclick="Auth.closeModal()" aria-label="Cerrar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      <button class="modal-close" onclick="Auth.closeModal()" aria-label="Cerrar"><span class="material-symbols-outlined" style="font-size: 20px;">close</span></button>
       <div class="steps-bar hidden" id="steps-bar">
         <div class="step-dot active" id="sd1">1</div>
         <div class="step-line" id="sl1"></div>
@@ -312,19 +307,30 @@
     </div>
   </div>
 
+  <!-- ══ CHECKOUT MODAL ══ -->
+  <div class="checkout-overlay" id="checkout-overlay" onclick="Checkout.closeOutside(event)">
+    <div class="checkout-modal" role="dialog" aria-modal="true" aria-label="Comprar boletos">
+      <button class="checkout-close" onclick="Checkout.close()" aria-label="Cerrar">
+        <span class="material-symbols-outlined" style="font-size:20px">close</span>
+      </button>
+      <div id="checkout-body"></div>
+    </div>
+  </div>
+
   <!-- ══ FOOTER ══ -->
   <footer id="main-footer"></footer>
 
-  <!-- Scripts: order matters — dependencies must load first -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="assets/js/icons.js"></script>
   <script src="assets/js/data.js"></script>
-  <script src="assets/js/zones.js"></script>
-  <script src="assets/js/profile.js"></script>
+  <script src="assets/js/dashboard.js?v=5"></script>
+  <script src="assets/js/profile.js?v=5"></script>
+  <script src="assets/js/checkout.js?v=5"></script>
   <script src="assets/js/carousel.js"></script>
   <script src="assets/js/search.js"></script>
   <script src="assets/js/pages.js"></script>
   <script src="assets/js/grid.js"></script>
-  <script src="assets/js/auth.js" type="module"></script>
+  <script src="assets/js/auth.js?v=5"></script>
   <script src="assets/js/app.js"></script>
 </body>
 </html>

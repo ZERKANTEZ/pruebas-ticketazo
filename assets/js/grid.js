@@ -1,7 +1,7 @@
 /**
  * grid.js — Grilla de eventos con filtros.
  */
-const Grid = (() => {
+window.Grid = (() => {
   let _filter = 'all';
   let _cat    = 'Todos';
 
@@ -126,7 +126,7 @@ const Grid = (() => {
           <span class="badge badge--gira">Gira</span>
           <div class="badge--cities">${cities.slice(0,3).join(' · ')}${cities.length > 3 ? ` +${cities.length-3}` : ''}</div>
           <button class="like-btn${liked?' liked':''}" data-id="${first.id}"
-            onclick="event.stopPropagation();Profile.toggleLike('${first.id}',this)" aria-label="Favorito"></button>
+            onclick="event.stopPropagation();Profile.toggleLike('${first.id}',this)" aria-label="Favorito">${liked ? Icons.heart : Icons.heartOutline}</button>
         </div>
         <div class="card-body">
           <p class="card-category card-category--tour">${first.category}</p>
@@ -163,7 +163,7 @@ const Grid = (() => {
           </div>
           ${ev.status === 'expired' ? '<div class="expired-overlay"><div class="expired-label">Caducado</div></div>' : ''}
           <button class="like-btn${liked?' liked':''}" data-id="${ev.id}"
-            onclick="event.stopPropagation();Profile.toggleLike('${ev.id}',this)" aria-label="Favorito"></button>
+            onclick="event.stopPropagation();Profile.toggleLike('${ev.id}',this)" aria-label="Favorito">${liked ? Icons.heart : Icons.heartOutline}</button>
         </div>
         <div class="card-body">
           <p class="card-category card-category--event">${ev.category}</p>

@@ -17,7 +17,7 @@ const Pages = (() => {
 
     document.getElementById('artist-hero-img').src = artist.image;
     document.getElementById('artist-hero-img').alt = artist.name;
-    document.getElementById('artist-avatar').textContent = artist.name.substring(0, 2).toUpperCase();
+    document.getElementById('artist-avatar').innerHTML = Icons._icon('mic', 32, '#fff');
     document.getElementById('artist-name').textContent   = artist.name;
     document.getElementById('artist-genre').textContent  = artist.genre;
     document.getElementById('artist-bio').textContent    = artist.bio;
@@ -270,7 +270,7 @@ const Pages = (() => {
           <div class="review-card">
             <div class="review-header">
               <div class="reviewer-info">
-                <div class="reviewer-avatar">${r.user.substring(0, 2).toUpperCase()}</div>
+                <div class="reviewer-avatar"><span class="material-symbols-outlined" style="font-size:18px;color:#fff;">person</span></div>
                 <div>
                   <div class="reviewer-name">${r.user}</div>
                   <div class="reviewer-date">${r.date}</div>
@@ -426,7 +426,7 @@ const Pages = (() => {
       return;
     }
     const ev = EVENTS.find(e => e.id === id);
-    alert(`Redirigiendo al flujo de compra:\n${ev?.title}\n${ev?.city}`);
+    Checkout.open(id);
   }
 
   function handleBuyClick() {
