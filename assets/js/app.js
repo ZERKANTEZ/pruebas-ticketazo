@@ -13,18 +13,27 @@ window.App = (() => {
     _prev    = _current;
     _current = page;
 
-    // El dashboard tiene su propio layout — ocultar todo lo demás
+    if (page !== 'ticket') {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('ticket')) {
+        url.searchParams.delete('ticket');
+        history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+    }
+
+    // El dashboard y el ticket tienen layout especial.
     const isDash = page === 'dashboard';
+    const isTicket = page === 'ticket';
     const mobileMenu = document.getElementById('mobile-menu');
     mobileMenu?.classList.remove('open');
-    document.getElementById('navbar')?.style.setProperty('display', isDash ? 'none' : '');
-    mobileMenu?.style.setProperty('display', isDash ? 'none' : '');
-    document.getElementById('main-footer')?.style.setProperty('display', isDash ? 'none' : '');
+    document.getElementById('navbar')?.style.setProperty('display', (isDash || isTicket) ? 'none' : '');
+    mobileMenu?.style.setProperty('display', (isDash || isTicket) ? 'none' : '');
+    document.getElementById('main-footer')?.style.setProperty('display', (isDash || isTicket) ? 'none' : '');
     if (typeof Zones !== 'undefined' && typeof Zones.closeSidebar === 'function') {
       Zones.closeSidebar();
     }
     // Force body background to match dashboard when on dashboard
-    document.body.style.background = isDash ? '#f8fafc' : '';
+    document.body.style.background = isDash ? '#f8fafc' : (isTicket ? '#f4f4f5' : '');
     document.body.style.overflow = (isDash && window.innerWidth > 900) ? 'hidden' : '';
   }
 
@@ -75,18 +84,6 @@ window.App = (() => {
     const footer = document.getElementById('main-footer');
     if (!footer) return;
     footer.innerHTML = `
-      <div class="footer-newsletter">
-        <div class="footer-nl-inner">
-          <div>
-            <div class="footer-nl-title">No te pierdas ningún evento</div>
-            <div class="footer-nl-sub">Recibe las mejores preventas directo en tu correo.</div>
-          </div>
-          <div class="footer-nl-form">
-            <input class="footer-nl-input" type="email" id="nl-email" placeholder="tu@correo.com"/>
-            <button class="footer-nl-btn" onclick="App.subscribe()">Suscribirse</button>
-          </div>
-        </div>
-      </div>
       <div class="footer-main">
         <div>
           <div class="footer-brand-logo" onclick="App.navigate('home')">
@@ -110,7 +107,7 @@ window.App = (() => {
         <div>
           <div class="footer-col-title">Ayuda</div>
           <div class="footer-links">
-            ${['Centro de ayuda','Preguntas frecuentes','Política de reembolsos','Términos y condiciones','Aviso de privacidad','Organizadores']
+            ${['Centro de ayuda','Preguntas frecuentes','Politica de cancelaciones','Terminos y condiciones','Aviso de privacidad','Organizadores']
               .map(l => `<a class="footer-link" href="#">${l}</a>`).join('')}
           </div>
         </div>
@@ -145,13 +142,6 @@ window.App = (() => {
       </div>`;
   }
 
-  function subscribe() {
-    const email = document.getElementById('nl-email')?.value.trim();
-    if (!email) return;
-    document.getElementById('nl-email').value = '';
-    alert(`¡Suscrito!\nRecibirás novedades en ${email}`);
-  }
-
   // ── Init ────────────────────────────────
   function init() {
     _buildFooter();
@@ -159,6 +149,7 @@ window.App = (() => {
     Carousel.init();
     Grid.init();
     updateNav();
+    Profile.maybeOpenSharedTicketFromUrl?.();
   }
 
   if (document.readyState === 'loading') {
@@ -167,5 +158,5 @@ window.App = (() => {
     init();
   }
 
-  return { navigate, goBack, updateNav, toggleMobile, subscribe };
+  return { navigate, goBack, updateNav, toggleMobile };
 })();

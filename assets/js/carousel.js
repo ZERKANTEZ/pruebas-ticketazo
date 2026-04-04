@@ -4,38 +4,76 @@
  */
 
 window.Carousel = (() => {
-  // ── State ──────────────────────────────
-  let current  = 0;
-  let timer    = null;
+  let current = 0;
+  let timer = null;
   let dragging = false;
-  let startX   = 0;
+  let startX = 0;
   let currentX = 0;
-  let diffX    = 0;
+  let diffX = 0;
   let snapTimeout = null;
+  let touchBound = false;
+  let keyboardBound = false;
 
-  const INTERVAL     = 7000;
-  const SWIPE_THRESH = 60; // px mínimos para cambiar slide
+  const INTERVAL = 7000;
+  const SWIPE_THRESH = 60;
 
-  // ── DOM refs ───────────────────────────
-  const track  = () => document.getElementById('hero-track');
-  const dots   = () => document.getElementById('hero-dots');
+  const track = () => document.getElementById('hero-track');
+  const dots = () => document.getElementById('hero-dots');
   const titleEl = () => document.getElementById('hero-title');
-  const subEl   = () => document.getElementById('hero-sub');
-  const ctaBtn  = () => document.getElementById('hero-cta-btn');
-  const inner   = () => document.getElementById('hero-inner');
+  const subEl = () => document.getElementById('hero-sub');
+  const ctaBtn = () => document.getElementById('hero-cta-btn');
+  const inner = () => document.getElementById('hero-inner');
 
-  // ── Init ───────────────────────────────
-  function init() {
-    const t = track();
-    if (t && t.children.length > 0) {
-      const firstClone = t.firstElementChild.cloneNode(true);
-      const lastClone = t.lastElementChild.cloneNode(true);
-      t.appendChild(firstClone);
-      t.insertBefore(lastClone, t.firstElementChild);
+  function _findEvent(eventId) {
+    return EVENTS.find(event => event.id === eventId) || null;
+  }
 
-      t.style.transition = 'none';
-      applyTranslate(-100, '%');
+  function _slideData(index) {
+    const slide = HERO_SLIDES[index];
+    if (!slide) return null;
+
+    const event = _findEvent(slide.eventId);
+    return {
+      ...slide,
+      image: event?.image || slide.image || 'assets/img/logo.png',
+      title: slide.title || event?.title || 'Evento Ticketazo',
+      sub: slide.sub || [event?.artist, event?.city].filter(Boolean).join(' - '),
+      cta: slide.cta || `Ver ${event?.title || 'evento'}`,
+    };
+  }
+
+  function _renderSlideMarkup(slide) {
+    return `
+      <div class="hero-slide">
+        <img src="${slide.image}" alt="${slide.title}" loading="lazy"/>
+        <div class="hero-overlay"></div>
+        <div class="hero-overlay-lr"></div>
+      </div>`;
+  }
+
+  function _renderSlides() {
+    const element = track();
+    const slides = HERO_SLIDES.map((_, index) => _slideData(index)).filter(Boolean);
+    if (!element) return;
+
+    if (!slides.length) {
+      element.innerHTML = '';
+      return;
     }
+
+    element.innerHTML = [
+      _renderSlideMarkup(slides[slides.length - 1]),
+      ...slides.map(_renderSlideMarkup),
+      _renderSlideMarkup(slides[0]),
+    ].join('');
+
+    current = 0;
+    element.style.transition = 'none';
+    applyTranslate(-100, '%');
+  }
+
+  function init() {
+    _renderSlides();
     buildDots();
     updateContent();
     bindTouch();
@@ -43,48 +81,51 @@ window.Carousel = (() => {
     startTimer();
   }
 
-  function buildDots() {
-    const el = dots();
-    el.innerHTML = HERO_SLIDES.map((_, i) =>
-      `<button class="hero-dot${i === 0 ? ' active' : ''}"
-        onclick="Carousel.goTo(${i})"
-        aria-label="Slide ${i + 1}"
-        role="tab"
-        aria-selected="${i === 0}">
-      </button>`
-    ).join('');
+  function refresh() {
+    clearTimeout(snapTimeout);
+    _renderSlides();
+    buildDots();
+    updateContent();
+    updateDots();
+    restartTimer();
   }
 
-  // ── Navigation ─────────────────────────
-  function goTo(n) {
-    const maxIdx = HERO_SLIDES.length;
-    const t = track();
+  function buildDots() {
+    const element = dots();
+    if (!element) return;
 
-    if (n < -1) {
-      if (t) {
-        t.style.transition = 'none';
-        applyTranslate((maxIdx) * -100, '%');
-        void t.offsetWidth;
-      }
-      n = maxIdx - 2;
+    element.innerHTML = HERO_SLIDES.map((_, index) => `
+      <button class="hero-dot${index === 0 ? ' active' : ''}"
+        onclick="Carousel.goTo(${index})"
+        aria-label="Slide ${index + 1}"
+        role="tab"
+        aria-selected="${index === 0}">
+      </button>`).join('');
+  }
+
+  function goTo(nextIndex) {
+    const maxIdx = HERO_SLIDES.length;
+    const element = track();
+    if (!maxIdx || !element) return;
+
+    if (nextIndex < -1) {
+      element.style.transition = 'none';
+      applyTranslate(maxIdx * -100, '%');
+      void element.offsetWidth;
+      nextIndex = maxIdx - 2;
     }
-    
-    if (n > maxIdx) {
-      if (t) {
-        t.style.transition = 'none';
-        applyTranslate(1 * -100, '%');
-        void t.offsetWidth;
-      }
-      n = 1;
+
+    if (nextIndex > maxIdx) {
+      element.style.transition = 'none';
+      applyTranslate(-100, '%');
+      void element.offsetWidth;
+      nextIndex = 1;
     }
-    
-    current = n;
-    
-    if (t) {
-      t.style.transition = 'transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
-    }
+
+    current = nextIndex;
+    element.style.transition = 'transform 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
     applyTranslate((current + 1) * -100, '%');
-    
+
     updateDots();
     updateContent();
     restartTimer();
@@ -92,16 +133,18 @@ window.Carousel = (() => {
     clearTimeout(snapTimeout);
     if (current === maxIdx) {
       snapTimeout = setTimeout(() => {
-        if (!dragging && track() && current === maxIdx) {
-          track().style.transition = 'none';
+        const currentTrack = track();
+        if (!dragging && currentTrack && current === maxIdx) {
+          currentTrack.style.transition = 'none';
           current = 0;
           applyTranslate((current + 1) * -100, '%');
         }
       }, 500);
     } else if (current === -1) {
       snapTimeout = setTimeout(() => {
-        if (!dragging && track() && current === -1) {
-          track().style.transition = 'none';
+        const currentTrack = track();
+        if (!dragging && currentTrack && current === -1) {
+          currentTrack.style.transition = 'none';
           current = maxIdx - 1;
           applyTranslate((current + 1) * -100, '%');
         }
@@ -109,43 +152,51 @@ window.Carousel = (() => {
     }
   }
 
-  function next() { goTo(current + 1); }
-  function prev() { goTo(current - 1); }
+  function next() {
+    goTo(current + 1);
+  }
+
+  function prev() {
+    goTo(current - 1);
+  }
 
   function applyTranslate(value, unit = 'px') {
-    const t = track();
-    if (!t) return;
-    t.style.transform = `translateX(${value}${unit})`;
+    const element = track();
+    if (!element) return;
+    element.style.transform = `translateX(${value}${unit})`;
   }
 
   function updateDots() {
     const maxIdx = HERO_SLIDES.length;
+    const element = dots();
+    if (!maxIdx || !element) return;
+
     const realIdx = (current % maxIdx + maxIdx) % maxIdx;
-    const allDots = dots().querySelectorAll('.hero-dot');
-    allDots.forEach((d, i) => {
-      d.classList.toggle('active', i === realIdx);
-      d.setAttribute('aria-selected', i === realIdx);
+    element.querySelectorAll('.hero-dot').forEach((dot, index) => {
+      const active = index === realIdx;
+      dot.classList.toggle('active', active);
+      dot.setAttribute('aria-selected', active);
     });
   }
 
   function updateContent() {
     const maxIdx = HERO_SLIDES.length;
-    const realIdx = (current % maxIdx + maxIdx) % maxIdx;
-    const slide = HERO_SLIDES[realIdx];
-    const el = inner();
-    if (!el) return;
+    const element = inner();
+    if (!maxIdx || !element) return;
 
-    // Reset animation
-    el.style.animation = 'none';
-    void el.offsetWidth; // reflow
-    el.style.animation = 'heroFadeUp 0.6s ease both';
+    const realIdx = (current % maxIdx + maxIdx) % maxIdx;
+    const slide = _slideData(realIdx);
+    if (!slide) return;
+
+    element.style.animation = 'none';
+    void element.offsetWidth;
+    element.style.animation = 'heroFadeUp 0.6s ease both';
 
     if (titleEl()) titleEl().textContent = slide.title;
-    if (subEl())   subEl().textContent   = slide.sub;
-    if (ctaBtn())  ctaBtn().textContent  = slide.cta;
+    if (subEl()) subEl().textContent = slide.sub;
+    if (ctaBtn()) ctaBtn().textContent = slide.cta;
   }
 
-  // ── Timer ──────────────────────────────
   function startTimer() {
     clearInterval(timer);
     timer = setInterval(() => next(), INTERVAL);
@@ -156,57 +207,53 @@ window.Carousel = (() => {
     startTimer();
   }
 
-  // ── Touch / Mouse drag ─────────────────
   function bindTouch() {
-    const el = document.getElementById('hero-section');
-    if (!el) return;
+    const element = document.getElementById('hero-section');
+    if (!element || touchBound) return;
 
-    // Touch events
-    el.addEventListener('touchstart', onDragStart, { passive: true });
-    el.addEventListener('touchmove',  onDragMove,  { passive: true });
-    el.addEventListener('touchend',   onDragEnd,   { passive: true });
-
-    // Mouse events (desktop drag)
-    el.addEventListener('mousedown',  onDragStart);
-    el.addEventListener('mousemove',  onDragMove);
-    el.addEventListener('mouseup',    onDragEnd);
-    el.addEventListener('mouseleave', onDragEnd);
+    element.addEventListener('touchstart', onDragStart, { passive: true });
+    element.addEventListener('touchmove', onDragMove, { passive: true });
+    element.addEventListener('touchend', onDragEnd, { passive: true });
+    element.addEventListener('mousedown', onDragStart);
+    element.addEventListener('mousemove', onDragMove);
+    element.addEventListener('mouseup', onDragEnd);
+    element.addEventListener('mouseleave', onDragEnd);
+    touchBound = true;
   }
 
-  function getClientX(e) {
-    return e.touches ? e.touches[0].clientX : e.clientX;
+  function getClientX(event) {
+    return event.touches ? event.touches[0].clientX : event.clientX;
   }
 
-  function onDragStart(e) {
+  function onDragStart(event) {
     dragging = true;
-    startX   = getClientX(e);
-    diffX    = 0;
-    const t  = track();
-    if (t) t.classList.add('dragging');
+    startX = getClientX(event);
+    diffX = 0;
+    track()?.classList.add('dragging');
     clearInterval(timer);
   }
 
-  function onDragMove(e) {
+  function onDragMove(event) {
     if (!dragging) return;
-    currentX = getClientX(e);
-    diffX    = currentX - startX;
 
-    // Move track live with resistance at edges
+    const element = track();
+    if (!element) return;
+
+    currentX = getClientX(event);
+    diffX = currentX - startX;
+
     const containerWidth = document.getElementById('hero-section')?.offsetWidth || window.innerWidth;
-    const baseOffset     = (current + 1) * -containerWidth;
-    const drag           = diffX * 0.85; // slight resistance
-    track().style.transition = 'none';
-    track().style.transform  = `translateX(${baseOffset + drag}px)`;
+    const baseOffset = (current + 1) * -containerWidth;
+    const dragOffset = diffX * 0.85;
+
+    element.style.transition = 'none';
+    element.style.transform = `translateX(${baseOffset + dragOffset}px)`;
   }
 
   function onDragEnd() {
     if (!dragging) return;
     dragging = false;
-
-    const t = track();
-    if (t) {
-      t.classList.remove('dragging');
-    }
+    track()?.classList.remove('dragging');
 
     if (Math.abs(diffX) >= SWIPE_THRESH) {
       diffX < 0 ? next() : prev();
@@ -217,29 +264,35 @@ window.Carousel = (() => {
     diffX = 0;
   }
 
-  // ── Keyboard ───────────────────────────
   function bindKeyboard() {
-    document.addEventListener('keydown', e => {
-      if (e.key === 'ArrowLeft')  prev();
-      if (e.key === 'ArrowRight') next();
+    if (keyboardBound) return;
+    document.addEventListener('keydown', event => {
+      if (event.key === 'ArrowLeft') prev();
+      if (event.key === 'ArrowRight') next();
     });
+    keyboardBound = true;
   }
 
-  // ── Hero button handlers ───────────────
   function handleBuy() {
     const maxIdx = HERO_SLIDES.length;
+    if (!maxIdx) return;
+
     const realIdx = (current % maxIdx + maxIdx) % maxIdx;
     const eventId = HERO_SLIDES[realIdx].eventId;
-    if (!Auth.isLoggedIn()) { Auth.openModal(); return; }
+    if (!Auth.isLoggedIn()) {
+      Auth.openModal();
+      return;
+    }
     Pages.openEvent(eventId);
   }
 
   function handleCta() {
     const maxIdx = HERO_SLIDES.length;
+    if (!maxIdx) return;
+
     const realIdx = (current % maxIdx + maxIdx) % maxIdx;
     Pages.openEvent(HERO_SLIDES[realIdx].eventId);
   }
 
-  // ── Public API ─────────────────────────
-  return { init, goTo, next, prev, handleBuy, handleCta };
+  return { init, refresh, goTo, next, prev, handleBuy, handleCta };
 })();

@@ -1,9 +1,11 @@
 /**
- * grid.js — Grilla de eventos con filtros.
+ * grid.js
+ * Grilla de eventos con filtros.
  */
+
 window.Grid = (() => {
   let _filter = 'all';
-  let _cat    = 'Todos';
+  let _cat = 'Todos';
 
   function init() {
     _buildPills();
@@ -11,26 +13,26 @@ window.Grid = (() => {
   }
 
   function _buildPills() {
-    const el = document.getElementById('cat-pills');
-    if (!el) return;
-    el.innerHTML = CATEGORIES.map(c =>
-      `<button class="cat-pill${c === 'Todos' ? ' active' : ''}" onclick="Grid.setCat('${c}')">${c}</button>`
+    const element = document.getElementById('cat-pills');
+    if (!element) return;
+    element.innerHTML = CATEGORIES.map(category =>
+      `<button class="cat-pill${category === 'Todos' ? ' active' : ''}" onclick="Grid.setCat('${category}')">${category}</button>`
     ).join('');
   }
 
-  function setFilter(f) {
-    _filter = f;
-    ['all','bestSeller','recommended'].forEach(k => {
-      document.getElementById(`f-${k}`)?.classList.toggle('active-filter', k === f);
+  function setFilter(filter) {
+    _filter = filter;
+    ['all', 'bestSeller', 'recommended'].forEach(key => {
+      document.getElementById(`f-${key}`)?.classList.toggle('active-filter', key === filter);
     });
     build();
   }
 
-  function setCat(cat) {
-    _cat = cat;
-    document.querySelectorAll('.cat-pill').forEach(p =>
-      p.classList.toggle('active', p.textContent.trim() === cat)
-    );
+  function setCat(category) {
+    _cat = category;
+    document.querySelectorAll('.cat-pill').forEach(pill => {
+      pill.classList.toggle('active', pill.textContent.trim() === category);
+    });
     build();
   }
 
@@ -39,84 +41,100 @@ window.Grid = (() => {
   }
 
   function clearAll() {
-    _filter = 'all'; _cat = 'Todos';
-    const inp = document.getElementById('search-input');
-    if (inp) inp.value = '';
+    _filter = 'all';
+    _cat = 'Todos';
+    const input = document.getElementById('search-input');
+    if (input) input.value = '';
     document.getElementById('search-clear')?.classList.add('hidden');
     document.getElementById('cat-pills')?.classList.remove('open');
     _buildPills();
-    ['all','bestSeller','recommended'].forEach(k =>
-      document.getElementById(`f-${k}`)?.classList.toggle('active-filter', k === 'all')
-    );
+    ['all', 'bestSeller', 'recommended'].forEach(key => {
+      document.getElementById(`f-${key}`)?.classList.toggle('active-filter', key === 'all');
+    });
     build();
   }
 
   function build() {
-    const q     = (Search.getQuery() || '').toLowerCase();
-    const items = _compute(q);
-    _renderHeader(items.length, q);
+    const query = (Search.getQuery() || '').toLowerCase();
+    const items = _compute(query);
+    _renderHeader(items.length, query);
     _renderGrid(items);
   }
 
-  function _compute(q) {
-    const seen  = new Set();
+  function _compute(query) {
+    const seen = new Set();
     const items = [];
-    EVENTS.forEach(ev => {
-      if (ev.status === 'expired') return;
-      const matchCat  = _cat === 'Todos' || ev.category === _cat;
-      const matchQ    = !q || [ev.city, ev.category, ev.venue||'', ev.tourName||''].some(v => v.toLowerCase().includes(q));
-      const matchF    = _filter === 'bestSeller' ? ev.bestSeller : _filter === 'recommended' ? ev.recommended : true;
-      if (!matchCat || !matchQ || !matchF) return;
 
-      if (ev.tourName) {
-        const key = `${ev.artistId}-${ev.tourName}`;
+    EVENTS.forEach(event => {
+      if (event.status === 'expired') return;
+
+      const matchCategory = _cat === 'Todos' || event.category === _cat;
+      const matchQuery = !query || [event.city, event.category, event.venue || '', event.tourName || '']
+        .some(value => value.toLowerCase().includes(query));
+      const matchFilter = _filter === 'bestSeller'
+        ? event.bestSeller
+        : _filter === 'recommended'
+          ? event.recommended
+          : true;
+
+      if (!matchCategory || !matchQuery || !matchFilter) return;
+
+      if (event.tourName) {
+        const key = `${event.artistId}-${event.tourName}`;
         if (seen.has(key)) return;
         seen.add(key);
-        const dates = EVENTS.filter(e => e.artistId === ev.artistId && e.tourName === ev.tourName && e.status !== 'expired')
-                            .sort((a, b) => new Date(a.date) - new Date(b.date));
-        items.push({ type:'tour', artistId:ev.artistId, tourName:ev.tourName, dates });
-      } else {
-        items.push({ type:'event', ev });
+        const dates = EVENTS
+          .filter(item => item.artistId === event.artistId && item.tourName === event.tourName && item.status !== 'expired')
+          .sort((left, right) => new Date(left.date) - new Date(right.date));
+        items.push({ type: 'tour', artistId: event.artistId, tourName: event.tourName, dates });
+        return;
       }
+
+      items.push({ type: 'event', event });
     });
+
     return items;
   }
 
-  function _renderHeader(count, q) {
-    const has = q || _cat !== 'Todos' || _filter !== 'all';
-    const titleEl = document.getElementById('grid-title');
-    const countEl = document.getElementById('grid-count');
-    const clearEl = document.getElementById('clear-all-btn');
-    if (titleEl) titleEl.textContent = has ? 'Resultados' : 'Eventos Destacados';
-    if (clearEl) clearEl.classList.toggle('hidden', !has);
-    if (countEl) {
+  function _renderHeader(count, query) {
+    const hasFilters = query || _cat !== 'Todos' || _filter !== 'all';
+    const title = document.getElementById('grid-title');
+    const countLabel = document.getElementById('grid-count');
+    const clearButton = document.getElementById('clear-all-btn');
+
+    if (title) title.textContent = hasFilters ? 'Resultados' : 'Eventos Destacados';
+    if (clearButton) clearButton.classList.toggle('hidden', !hasFilters);
+
+    if (countLabel) {
       let html = `${count} resultado${count !== 1 ? 's' : ''}`;
       if (_cat !== 'Todos') html += ` en <span>${_cat}</span>`;
-      if (q) html += ` · "<span>${q}</span>"`;
-      countEl.innerHTML = html;
+      if (query) html += ` · "<span>${query}</span>"`;
+      countLabel.innerHTML = html;
     }
   }
 
   function _renderGrid(items) {
     const grid = document.getElementById('events-grid');
     if (!grid) return;
+
     if (!items.length) {
-      grid.innerHTML = `<div class="empty-state"><div class="empty-icon">${Icons.search}</div><h3 class="empty-title">Sin resultados</h3><p class="empty-sub">¿Buscas un artista? Escríbelo y selecciónalo del menú.</p><button class="btn btn-ghost" onclick="Grid.clearAll()">Limpiar filtros</button></div>`;
+      grid.innerHTML = `<div class="empty-state"><div class="empty-icon">${Icons.search}</div><h3 class="empty-title">Sin resultados</h3><p class="empty-sub">¿Buscas un artista? Escribelo y seleccionalo del menu.</p><button class="btn btn-ghost" onclick="Grid.clearAll()">Limpiar filtros</button></div>`;
       return;
     }
+
     grid.innerHTML = items.map(item =>
-      item.type === 'tour' ? _tourCard(item) : _eventCard(item.ev)
+      item.type === 'tour' ? _tourCard(item) : _eventCard(item.event)
     ).join('');
   }
 
   function _tourCard(item) {
-    const first    = item.dates[0];
-    const last     = item.dates[item.dates.length - 1];
-    const cities   = item.dates.map(e => e.city);
-    const minPrice = Math.min(...item.dates.map(e => Zones.getMinPrice(e.id)));
-    const liked    = Profile.isLiked(first.id);
-    const d1 = _fmt(first.date, {day:'numeric', month:'short'});
-    const d2 = _fmt(last.date,  {day:'numeric', month:'short', year:'numeric'});
+    const first = item.dates[0];
+    const last = item.dates[item.dates.length - 1];
+    const cities = item.dates.map(event => event.city);
+    const minPrice = Math.min(...item.dates.map(event => Zones.getMinPrice(event.id)));
+    const liked = Profile.isLiked(first.id);
+    const start = _fmt(first.date, { day: 'numeric', month: 'short' });
+    const end = _fmt(last.date, { day: 'numeric', month: 'short', year: 'numeric' });
 
     return `
       <article class="card card--tour" onclick="Pages.openArtist('${item.artistId}')" role="button" tabindex="0">
@@ -124,8 +142,8 @@ window.Grid = (() => {
           <img src="${first.image}" alt="${item.tourName}" loading="lazy"/>
           <div class="card-img-overlay"></div>
           <span class="badge badge--gira">Gira</span>
-          <div class="badge--cities">${cities.slice(0,3).join(' · ')}${cities.length > 3 ? ` +${cities.length-3}` : ''}</div>
-          <button class="like-btn${liked?' liked':''}" data-id="${first.id}"
+          <div class="badge--cities">${cities.slice(0, 3).join(' · ')}${cities.length > 3 ? ` +${cities.length - 3}` : ''}</div>
+          <button class="like-btn${liked ? ' liked' : ''}" data-id="${first.id}"
             onclick="event.stopPropagation();Profile.toggleLike('${first.id}',this)" aria-label="Favorito">${liked ? Icons.heart : Icons.heartOutline}</button>
         </div>
         <div class="card-body">
@@ -133,8 +151,8 @@ window.Grid = (() => {
           <h2 class="card-title">${item.tourName}</h2>
           <p class="card-artist">${first.artist}</p>
           <div class="card-meta">
-            <div class="card-meta-row"><span class="meta-icon"></span>${d1} — ${d2}</div>
-            <div class="card-meta-row"><span class="meta-icon"></span>${item.dates.length} ciudad${item.dates.length !== 1?'es':''}</div>
+            <div class="card-meta-row"><span class="meta-icon"></span>${start} — ${end}</div>
+            <div class="card-meta-row"><span class="meta-icon"></span>${item.dates.length} ciudad${item.dates.length !== 1 ? 'es' : ''}</div>
           </div>
           <div class="card-footer">
             <div><p class="price-from">Desde</p><p class="price-value">$${minPrice.toLocaleString()}</p></div>
@@ -144,54 +162,55 @@ window.Grid = (() => {
       </article>`;
   }
 
-  function _eventCard(ev) {
-    const reviews  = ev.reviews || [];
-    const liked    = Profile.isLiked(ev.id);
-    const dateStr  = _fmt(ev.date, {weekday:'short', day:'numeric', month:'short', year:'numeric'});
-    const location = ev.venue ? `${ev.venue}, ${ev.city}` : ev.city;
-    const stars    = reviews.length ? _stars(reviews) : '';
-    const minPrice = Zones.getMinPrice(ev.id);
+  function _eventCard(event) {
+    const reviews = event.reviews || [];
+    const liked = Profile.isLiked(event.id);
+    const dateLabel = _fmt(event.date, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    const location = event.venue ? `${event.venue}, ${event.city}` : event.city;
+    const stars = reviews.length ? _stars(reviews) : '';
+    const price = Zones.getMinPrice(event.id);
 
     return `
-      <article class="card card--event" onclick="Pages.openEvent('${ev.id}')" role="button" tabindex="0">
+      <article class="card card--event" onclick="Pages.openEvent('${event.id}')" role="button" tabindex="0">
         <div class="card-img">
-          <img src="${ev.image}" alt="${ev.title}" loading="lazy"/>
+          <img src="${event.image}" alt="${event.title}" loading="lazy"/>
           <div class="card-img-overlay"></div>
           <div class="card-badges">
-            ${ev.bestSeller ? '<span class="badge badge--top">Top</span>' : ''}
-            ${ev.adultsOnly ? '<span class="badge badge--18">+18</span>' : ''}
+            ${event.bestSeller ? '<span class="badge badge--top">Top</span>' : ''}
           </div>
-          ${ev.status === 'expired' ? '<div class="expired-overlay"><div class="expired-label">Caducado</div></div>' : ''}
-          <button class="like-btn${liked?' liked':''}" data-id="${ev.id}"
-            onclick="event.stopPropagation();Profile.toggleLike('${ev.id}',this)" aria-label="Favorito">${liked ? Icons.heart : Icons.heartOutline}</button>
+          ${event.status === 'expired' ? '<div class="expired-overlay"><div class="expired-label">Caducado</div></div>' : ''}
+          <button class="like-btn${liked ? ' liked' : ''}" data-id="${event.id}"
+            onclick="event.stopPropagation();Profile.toggleLike('${event.id}',this)" aria-label="Favorito">${liked ? Icons.heart : Icons.heartOutline}</button>
         </div>
         <div class="card-body">
-          <p class="card-category card-category--event">${ev.category}</p>
-          <h2 class="card-title">${ev.title}</h2>
-          <p class="card-artist">${ev.artist}</p>
+          <p class="card-category card-category--event">${event.category}</p>
+          <h2 class="card-title">${event.title}</h2>
+          <p class="card-artist">${event.artist}</p>
           <div class="card-meta">
-            <div class="card-meta-row"><span class="meta-icon"></span>${dateStr}</div>
+            <div class="card-meta-row"><span class="meta-icon"></span>${dateLabel}</div>
             <div class="card-meta-row"><span class="meta-icon"></span>${location}</div>
           </div>
           ${stars}
           <div class="card-footer">
-            <div><p class="price-from">Desde</p><p class="price-value">$${minPrice.toLocaleString()}</p></div>
-            <button class="btn btn-primary btn-sm" ${ev.status==='expired'?'disabled':''}
-              onclick="event.stopPropagation();Pages.handleBuy('${ev.id}')">Comprar</button>
+            <div><p class="price-from">Precio</p><p class="price-value">$${price.toLocaleString()}</p></div>
+            <button class="btn btn-primary btn-sm" ${event.status === 'expired' ? 'disabled' : ''}
+              onclick="event.stopPropagation();Pages.handleBuy('${event.id}')">Comprar</button>
           </div>
         </div>
       </article>`;
   }
 
   function _stars(reviews) {
-    const avg = reviews.reduce((a, r) => a + r.rating, 0) / reviews.length;
+    const average = reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length;
     return `<div class="card-stars">
-      ${[1,2,3,4,5].map(i => `<span class="star star--${i <= Math.round(avg)?'filled':'empty'}">${Icons.star}</span>`).join('')}
+      ${[1, 2, 3, 4, 5].map(index => `<span class="star star--${index <= Math.round(average) ? 'filled' : 'empty'}">${Icons.star}</span>`).join('')}
       <span class="star-count">(${reviews.length})</span>
     </div>`;
   }
 
-  function _fmt(d, opts) { return new Date(d).toLocaleDateString('es-ES', opts); }
+  function _fmt(date, options) {
+    return new Date(date).toLocaleDateString('es-ES', options);
+  }
 
   return { init, build, setFilter, setCat, toggleCats, clearAll };
 })();

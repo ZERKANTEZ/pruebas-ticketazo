@@ -194,17 +194,18 @@
 .ticket-info { flex: 1; min-width: 0; }
 .ticket-event-name { font-size: 0.9rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ticket-meta       { font-size: 0.73rem; color: var(--text-muted); margin-top: 3px; }
-.ticket-zone-badge {
-  font-size: 0.65rem;
+.ticket-price-tag {
+  font-size: 0.68rem;
   font-weight: 700;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: var(--radius-full);
-  margin-top: 5px;
-  display: inline-block;
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  background: rgba(135,206,235,.12);
+  color: var(--color-blue);
+  border: 1px solid rgba(135,206,235,.25);
 }
-.zone--vip   { background: rgba(250,204,21,.15); color: #facc15; border: 1px solid rgba(250,204,21,.25); }
-.zone--oro   { background: rgba(251,146,60,.15); color: #fb923c; border: 1px solid rgba(251,146,60,.25); }
-.zone--plata { background: rgba(135,206,235,.15); color: var(--color-blue); border: 1px solid rgba(135,206,235,.25); }
 
 .ticket-qr-toggle {
   font-size: 0.75rem;
@@ -239,81 +240,257 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 168px;
+  min-height: 168px;
+}
+
+.ticket-qr-real {
+  min-width: 148px;
+  min-height: 148px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ticket-qr-real img,
+.ticket-qr-real canvas,
+.ticket-qr-real table {
+  display: block;
 }
 
 .ticket-qr-info { text-align: center; }
 .ticket-qr-code { font-family: monospace; font-size: 0.8rem; color: var(--color-blue); letter-spacing: 0.1em; }
 .ticket-qr-hint { font-size: 0.72rem; color: var(--text-muted); margin-top: 4px; }
-.ticket-refund-panel {
-  min-width: 220px;
-  max-width: 280px;
-  width: 100%;
-  padding: 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(138,43,226,.15);
-  background: rgba(15,23,42,.35);
+.ticket-qr-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 12px;
 }
-.ticket-refund-title {
-  font-size: 0.78rem;
+.ticket-link-btn {
+  border: 1px solid rgba(135,206,235,.25);
+  background: rgba(135,206,235,.12);
+  color: var(--color-blue);
+  padding: 8px 12px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  font-size: 0.76rem;
   font-weight: 700;
-  color: #fff;
-  margin-bottom: 6px;
+  font-family: var(--font-body);
 }
-.ticket-refund-copy {
-  font-size: 0.72rem;
+.ticket-link-btn--ghost {
+  background: rgba(138,43,226,.08);
+  border-color: rgba(138,43,226,.2);
+  color: var(--color-purple);
+}
+.ticket-qr-fallback {
+  text-align: center;
+  color: #475569;
+  font-size: 0.78rem;
   line-height: 1.5;
-  color: var(--text-muted);
 }
-.ticket-refund-status {
+
+/* Ticket page */
+.ticket-page-wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 104px 24px 56px;
+}
+.ticket-page-card {
+  background: #fff;
+  color: #111827;
+  border: 1px solid #d4d4d8;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 22px 52px rgba(15, 23, 42, 0.08);
+}
+.ticket-page-card--invalid {
+  padding: 32px;
+  text-align: center;
+}
+.ticket-page-body {
+  padding: 28px;
+  position: relative;
+  z-index: 1;
+}
+.ticket-page-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.ticket-page-brand-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ticket-page-brand-right {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-direction: column;
+}
+.ticket-page-logo {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+.ticket-page-brand-name {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+.ticket-page-brand-sub {
+  font-size: 0.82rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+.ticket-page-brand-meta {
+  font-size: 0.78rem;
+  color: #64748b;
+  font-weight: 600;
+}
+.ticket-page-home-btn {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #111827;
+  padding: 10px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.82rem;
+  font-family: var(--font-body);
+  transition: background 0.15s, border-color 0.15s;
+}
+.ticket-page-home-btn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+.ticket-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.ticket-page-kicker {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+.ticket-page-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.9rem;
+  line-height: 1.05;
+  color: #0f172a;
+}
+.ticket-page-copy {
+  margin: 8px 0 0;
+  color: #475569;
+  font-size: 0.95rem;
+}
+.ticket-page-statuses {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ticket-page-status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 10px;
-  padding: 5px 10px;
+  padding: 8px 12px;
   border-radius: var(--radius-full);
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   font-weight: 700;
+  border: 1px solid transparent;
+}
+.ticket-page-status--ok {
+  background: rgba(34,197,94,.12);
+  border-color: rgba(34,197,94,.28);
+  color: #22c55e;
+}
+.ticket-page-status--info {
+  background: rgba(135,206,235,.12);
+  border-color: rgba(135,206,235,.28);
+  color: var(--color-blue);
+}
+.ticket-page-status--invalid {
+  background: rgba(248,113,113,.12);
+  border-color: rgba(248,113,113,.24);
+  color: #f87171;
+}
+.ticket-page-doc-rule {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(148,163,184,.15), rgba(148,163,184,.65), rgba(148,163,184,.15));
+  margin: 20px 0 0;
+}
+.ticket-page-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+.ticket-page-item {
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px;
+}
+.ticket-page-item span {
+  display: block;
+  font-size: 0.74rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  color: #6b7280;
+  margin-bottom: 6px;
 }
-.ticket-refund-status--pending {
-  background: rgba(251,191,36,.12);
-  color: #fbbf24;
-  border: 1px solid rgba(251,191,36,.18);
+.ticket-page-item strong {
+  display: block;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: #111827;
 }
-.ticket-refund-status--approved {
-  background: rgba(34,197,94,.12);
-  color: #4ade80;
-  border: 1px solid rgba(34,197,94,.2);
+.ticket-page-note {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #dbeafe;
+  color: #475569;
+  line-height: 1.6;
+  font-size: 0.86rem;
 }
-.ticket-refund-status--rejected {
-  background: rgba(248,113,113,.12);
-  color: #f87171;
-  border: 1px solid rgba(248,113,113,.2);
+.ticket-page-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
 }
-.ticket-refund-meta {
-  margin-top: 7px;
-  font-size: 0.7rem;
-  line-height: 1.45;
-  color: #cbd5e1;
-}
-.ticket-refund-btn {
-  width: 100%;
-  margin-top: 12px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(135,206,235,.18);
-  background: linear-gradient(90deg, rgba(56,189,248,.18), rgba(138,43,226,.18));
-  color: #fff;
-  font-size: 0.76rem;
-  font-weight: 700;
+.ticket-page-btn {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #111827;
+  padding: 10px 16px;
+  border-radius: var(--radius-full);
   cursor: pointer;
-  transition: opacity var(--transition-fast), transform var(--transition-fast);
+  font-weight: 700;
   font-family: var(--font-body);
 }
-.ticket-refund-btn:hover {
-  opacity: 0.92;
-  transform: translateY(-1px);
+.ticket-page-btn--primary {
+  background: linear-gradient(90deg, var(--color-blue), var(--color-purple));
+  color: #fff;
+  border-color: transparent;
 }
 
 /* ── Reviews in profile ── */
@@ -514,12 +691,100 @@
     padding: 14px;
   }
 
-  .ticket-refund-panel {
-    max-width: none;
-  }
-
   .ticket-qr-code {
     font-size: 0.72rem;
     word-break: break-all;
+  }
+
+  .ticket-page-wrap {
+    padding: 88px 16px 48px;
+  }
+
+  .ticket-page-body {
+    padding: 18px;
+  }
+
+  .ticket-page-brand {
+    align-items: flex-start;
+  }
+
+  .ticket-page-brand-right {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .ticket-page-home-btn {
+    width: 100%;
+  }
+
+  .ticket-page-title {
+    font-size: 1.5rem;
+  }
+
+  .ticket-page-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ticket-page-actions {
+    flex-direction: column;
+  }
+
+  .ticket-page-btn {
+    width: 100%;
+  }
+}
+
+@media print {
+  #navbar,
+  #main-footer,
+  .mobile-menu,
+  .checkout-overlay,
+  .modal-overlay {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  .page {
+    display: none !important;
+  }
+
+  #page-ticket {
+    display: block !important;
+  }
+
+  .ticket-page-wrap {
+    max-width: none;
+    padding: 0;
+  }
+
+  .ticket-page-card {
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .ticket-page-body {
+    padding: 0;
+  }
+
+  .ticket-page-brand {
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+  }
+
+  .ticket-page-actions {
+    display: none !important;
+  }
+
+  .ticket-page-home-btn {
+    display: none !important;
+  }
+
+  .ticket-page-note {
+    background: #fff;
+    border: 1px solid #d1d5db;
   }
 }

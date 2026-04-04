@@ -1,19 +1,50 @@
 /**
- * checkout.js — Flujo de compra de boletos.
- * Paso 1: Elegir zona y cantidad
- * Paso 2: Resumen + confirmación simulada
+ * checkout.js
+ * Flujo simple de compra de boletos.
+ * Paso 1: Cantidad
+ * Paso 2: Pago
+ * Paso 3: Confirmacion
  */
+
 window.Checkout = (() => {
   let _eventId = null;
-  let _selectedZone = null;
   let _qty = 1;
 
-  // ── Abrir ─────────────────────────────────
+  function _getEvent() {
+    return EVENTS.find(event => event.id === _eventId) || null;
+  }
+
+  function _getConfig() {
+    const event = _getEvent();
+    const config = typeof Zones !== 'undefined' && Zones.getTicketConfig
+      ? Zones.getTicketConfig(_eventId)
+      : { price: event?.ticketPrice || 0, capacity: event?.ticketCapacity || 0 };
+    const sold = typeof Zones !== 'undefined' && Zones.getSoldCount ? Zones.getSoldCount(_eventId) : null;
+    const remaining = typeof Zones !== 'undefined' && Zones.getRemainingCapacity
+      ? Zones.getRemainingCapacity(_eventId)
+      : null;
+    const remainingKnown = Number.isFinite(remaining);
+    return {
+      price: Number(config.price || 0),
+      capacity: Number(config.capacity || 0),
+      sold: Number.isFinite(sold) ? Number(sold) : null,
+      remaining: remainingKnown ? Number(remaining) : Math.max(Number(config.capacity || 0), 0),
+      remainingKnown,
+    };
+  }
+
   function open(eventId) {
     _eventId = eventId;
-    _selectedZone = null;
     _qty = 1;
-    _render('zones');
+
+    const config = _getConfig();
+    if (!config.price || !config.capacity) {
+      alert('Este evento no tiene boletaje disponible por el momento.');
+      _eventId = null;
+      return;
+    }
+
+    _render('tickets');
     document.getElementById('checkout-overlay')?.classList.add('open');
     document.body.style.overflow = 'hidden';
   }
@@ -22,118 +53,130 @@ window.Checkout = (() => {
     document.getElementById('checkout-overlay')?.classList.remove('open');
     document.body.style.overflow = '';
     _eventId = null;
-    _selectedZone = null;
+    _qty = 1;
   }
 
-  function closeOutside(e) {
-    if (e.target === document.getElementById('checkout-overlay')) close();
+  function closeOutside(event) {
+    if (event.target === document.getElementById('checkout-overlay')) close();
   }
 
-  // ── Progress bar helper ──────────────────
   function _progressBar(activeStep) {
     const steps = [
-      { label: 'Zona' },
+      { label: 'Boletos' },
       { label: 'Pago' },
       { label: 'Listo' },
     ];
+
     let html = '<div class="ck-progress">';
-    steps.forEach((s, i) => {
-      const state = i < activeStep ? 'done' : i === activeStep ? 'active' : '';
+    steps.forEach((step, index) => {
+      const state = index < activeStep ? 'done' : index === activeStep ? 'active' : '';
       html += `<div class="ck-step ${state}">
-        <div class="ck-step-circle">${i < activeStep ? '<span class="material-symbols-outlined" style="font-size:13px">check</span>' : i + 1}</div>
-        <div class="ck-step-label">${s.label}</div>
+        <div class="ck-step-circle">${index < activeStep ? '<span class="material-symbols-outlined" style="font-size:13px">check</span>' : index + 1}</div>
+        <div class="ck-step-label">${step.label}</div>
       </div>`;
-      if (i < steps.length - 1) html += `<div class="ck-step-line ${i < activeStep ? 'done' : ''}"></div>`;
+      if (index < steps.length - 1) html += `<div class="ck-step-line ${index < activeStep ? 'done' : ''}"></div>`;
     });
     html += '</div>';
     return html;
   }
 
-  // ── Render step ───────────────────────────
   function _render(step) {
     const body = document.getElementById('checkout-body');
     if (!body) return;
-    if (step === 'zones')   body.innerHTML = _stepZones();
+
+    if (step === 'tickets') body.innerHTML = _stepTickets();
     if (step === 'confirm') body.innerHTML = _stepConfirm();
     if (step === 'success') body.innerHTML = _stepSuccess();
   }
 
-  // ── Paso 1: Selección de zona ──────────────
-  function _stepZones() {
-    const ev = EVENTS.find(e => e.id === _eventId);
-    if (!ev) return '<p>Evento no encontrado.</p>';
-    const zones = Zones.getZones(_eventId);
-    const dateStr = new Date(ev.date).toLocaleDateString('es-ES', {
-      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+  function _header(event) {
+    const dateLabel = new Date(event.date).toLocaleDateString('es-ES', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
     });
 
     return `
-      ${_progressBar(0)}
       <div class="ck-header">
-        <div class="ck-event-img" style="background-image:url('${ev.image}')"></div>
+        <div class="ck-event-img" style="background-image:url('${event.image}')"></div>
         <div class="ck-event-info">
-          <div class="ck-event-title">${ev.title}</div>
-          <div class="ck-event-meta">${ev.artist}</div>
-          <div class="ck-event-meta">${dateStr}</div>
-          <div class="ck-event-meta">${ev.venue ? ev.venue + ', ' : ''}${ev.city}</div>
+          <div class="ck-event-title">${event.title}</div>
+          <div class="ck-event-meta">${event.artist}</div>
+          <div class="ck-event-meta">${dateLabel}</div>
+          <div class="ck-event-meta">${event.venue ? `${event.venue}, ` : ''}${event.city}</div>
         </div>
-      </div>
-
-      <div class="ck-body">
-        <div class="ck-section-title">
-          <span class="material-symbols-outlined" style="font-size:16px">chair</span>
-          Selecciona tu zona
-        </div>
-
-        <div class="ck-zones">
-          ${zones.length ? zones.map((z, i) => `
-            <div class="ck-zone ${_selectedZone === i ? 'selected' : ''}"
-                 id="ck-zone-${i}" onclick="Checkout.selectZone(${i})">
-              <div class="ck-zone-dot" style="background:${z.color}"></div>
-              <div class="ck-zone-info">
-                <div class="ck-zone-name">${z.name}</div>
-                <div class="ck-zone-cap">${z.capacity.toLocaleString()} lugares</div>
-              </div>
-              <div class="ck-zone-price">$${z.price.toLocaleString()}</div>
-              <div class="ck-zone-check">${_selectedZone === i ? '<span class="material-symbols-outlined" style="font-size:20px;color:#a78bfa">check_circle</span>' : ''}</div>
-            </div>`).join('')
-            : '<p style="color:#475569;font-size:.85rem">Sin zonas configuradas para este evento.</p>'}
-        </div>
-
-        ${_selectedZone !== null ? `
-          <div class="ck-qty-row">
-            <div class="ck-qty-label">Cantidad de boletos</div>
-            <div class="ck-qty-ctrl">
-              <button class="ck-qty-btn" onclick="Checkout.changeQty(-1)">−</button>
-              <span class="ck-qty-val" id="ck-qty-val">${_qty}</span>
-              <button class="ck-qty-btn" onclick="Checkout.changeQty(1)">+</button>
-            </div>
-          </div>
-          <div class="ck-subtotal">
-            Subtotal: <strong>$${(zones[_selectedZone].price * _qty).toLocaleString()}</strong>
-          </div>
-          <button class="ck-btn-primary" onclick="Checkout.goConfirm()">
-            Continuar
-            <span class="material-symbols-outlined" style="font-size:18px;vertical-align:middle;margin-left:6px">arrow_forward</span>
-          </button>
-        ` : ''}
-      </div>
-    `;
+      </div>`;
   }
 
-  // ── Paso 2: Confirmación ──────────────────
+  function _stepTickets() {
+    const event = _getEvent();
+    if (!event) return '<p>Evento no encontrado.</p>';
+
+    const config = _getConfig();
+    const subtotal = config.price * _qty;
+
+    return `
+      ${_progressBar(0)}
+      ${_header(event)}
+      <div class="ck-body">
+        <div class="ck-section-title">
+          <span class="material-symbols-outlined" style="font-size:16px">confirmation_number</span>
+          Selecciona tu cantidad
+        </div>
+
+        <div class="ck-ticket-config">
+          <div class="ck-ticket-config-copy">
+            <div class="ck-ticket-config-title">Boleto general</div>
+            <div class="ck-ticket-config-meta">Precio unico por persona</div>
+          </div>
+          <div class="ck-ticket-config-price">$${config.price.toLocaleString()}</div>
+        </div>
+
+        <div class="ck-ticket-capacity">
+          <div class="ck-ticket-capacity-row">
+            <span>Capacidad total</span>
+            <strong>${config.capacity.toLocaleString()} personas</strong>
+          </div>
+          <div class="ck-ticket-capacity-row">
+            <span>Disponibles ahora</span>
+            <strong>${config.remainingKnown ? `${config.remaining.toLocaleString()} boletos` : 'Consultando...'}</strong>
+          </div>
+        </div>
+
+        <div class="ck-qty-row">
+          <div class="ck-qty-label">Cantidad de boletos</div>
+          <div class="ck-qty-ctrl">
+            <button class="ck-qty-btn" onclick="Checkout.changeQty(-1)">-</button>
+            <span class="ck-qty-val" id="ck-qty-val">${_qty}</span>
+            <button class="ck-qty-btn" onclick="Checkout.changeQty(1)">+</button>
+          </div>
+        </div>
+
+        <div class="ck-subtotal">
+          Subtotal: <strong>$${subtotal.toLocaleString()}</strong>
+        </div>
+
+        <button class="ck-btn-primary" onclick="Checkout.goConfirm()" ${config.remainingKnown && config.remaining <= 0 ? 'disabled' : ''}>
+          Continuar
+          <span class="material-symbols-outlined" style="font-size:18px;vertical-align:middle;margin-left:6px">arrow_forward</span>
+        </button>
+      </div>`;
+  }
+
   function _stepConfirm() {
-    const ev = EVENTS.find(e => e.id === _eventId);
-    const zones = Zones.getZones(_eventId);
-    const zone = zones[_selectedZone];
-    const total = zone.price * _qty;
+    const event = _getEvent();
+    const config = _getConfig();
+    const total = config.price * _qty;
+
+    if (!event) return '<p>Evento no encontrado.</p>';
 
     return `
       ${_progressBar(1)}
       <div class="ck-body">
-        <div class="ck-back" onclick="Checkout._render('zones')">
+        <div class="ck-back" onclick="Checkout._render('tickets')">
           <span class="material-symbols-outlined" style="font-size:17px">arrow_back</span>
-          Cambiar zona
+          Cambiar cantidad
         </div>
 
         <div class="ck-section-title">
@@ -142,16 +185,10 @@ window.Checkout = (() => {
         </div>
 
         <div class="ck-summary">
-          <div class="ck-summary-row"><span>Evento</span><strong>${ev.title}</strong></div>
-          <div class="ck-summary-row">
-            <span>Zona</span>
-            <strong style="display:flex;align-items:center;gap:6px">
-              <span style="width:10px;height:10px;border-radius:50%;background:${zone.color};display:inline-block"></span>
-              ${zone.name}
-            </strong>
-          </div>
-          <div class="ck-summary-row"><span>Precio por boleto</span><strong>$${zone.price.toLocaleString()}</strong></div>
+          <div class="ck-summary-row"><span>Evento</span><strong>${event.title}</strong></div>
+          <div class="ck-summary-row"><span>Precio por boleto</span><strong>$${config.price.toLocaleString()}</strong></div>
           <div class="ck-summary-row"><span>Cantidad</span><strong>${_qty} boleto${_qty > 1 ? 's' : ''}</strong></div>
+          <div class="ck-summary-row"><span>Disponibles</span><strong>${config.remainingKnown ? config.remaining.toLocaleString() : 'Consultando...'}</strong></div>
           <div class="ck-summary-divider"></div>
           <div class="ck-summary-row ck-total"><span>Total</span><strong>$${total.toLocaleString()}</strong></div>
         </div>
@@ -163,7 +200,7 @@ window.Checkout = (() => {
 
         <div class="ck-card-form">
           <div class="ck-field">
-            <label>Número de tarjeta</label>
+            <label>Numero de tarjeta</label>
             <input type="text" id="ck-card-num" placeholder="0000 0000 0000 0000" maxlength="19"
               oninput="Checkout.fmtCard(this)" class="ck-input"/>
           </div>
@@ -179,7 +216,7 @@ window.Checkout = (() => {
             </div>
             <div class="ck-field ck-field--sm">
               <label>CVC</label>
-              <input type="text" id="ck-card-cvc" placeholder="•••" maxlength="4"
+              <input type="text" id="ck-card-cvc" placeholder="..." maxlength="4"
                 oninput="this.value=this.value.replace(/\\D/g,'')" class="ck-input"/>
             </div>
           </div>
@@ -195,15 +232,14 @@ window.Checkout = (() => {
           <span class="material-symbols-outlined" style="font-size:18px;vertical-align:middle;margin-right:6px">payments</span>
           Pagar $${total.toLocaleString()}
         </button>
-      </div>
-    `;
+      </div>`;
   }
 
-  // ── Paso 3: Éxito ─────────────────────────
   function _stepSuccess() {
-    const ev = EVENTS.find(e => e.id === _eventId);
-    const zones = Zones.getZones(_eventId);
-    const zone = zones[_selectedZone];
+    const event = _getEvent();
+    const config = _getConfig();
+    const total = config.price * _qty;
+    if (!event) return '<p>Compra realizada.</p>';
 
     return `
       ${_progressBar(2)}
@@ -211,8 +247,8 @@ window.Checkout = (() => {
         <div class="ck-success-icon">
           <span class="material-symbols-outlined" style="font-size:52px;color:#22c55e" filled>check_circle</span>
         </div>
-        <h2 class="ck-success-title">¡Compra exitosa!</h2>
-        <p class="ck-success-sub">Tus boletos han sido reservados.</p>
+        <h2 class="ck-success-title">Compra exitosa</h2>
+        <p class="ck-success-sub">Tus boletos han sido registrados en tu cuenta.</p>
 
         <div class="ck-ticket">
           <div class="ck-ticket-header">
@@ -220,100 +256,130 @@ window.Checkout = (() => {
               <span class="material-symbols-outlined" style="font-size:20px;color:#fff">confirmation_number</span>
             </div>
             <div>
-              <div class="ck-ticket-event">${ev?.title}</div>
-              <div class="ck-ticket-artist">${ev?.artist}</div>
+              <div class="ck-ticket-event">${event.title}</div>
+              <div class="ck-ticket-artist">${event.artist}</div>
             </div>
           </div>
           <div class="ck-ticket-detail">
-            <div class="ck-ticket-row"><span>Fecha</span><strong>${new Date(ev?.date).toLocaleDateString('es-ES', {day:'numeric',month:'long',year:'numeric'})}</strong></div>
-            <div class="ck-ticket-row"><span>Lugar</span><strong>${ev?.venue || ev?.city}</strong></div>
-            <div class="ck-ticket-row">
-              <span>Zona</span>
-              <strong style="display:flex;align-items:center;gap:6px">
-                <span style="width:8px;height:8px;border-radius:50%;background:${zone?.color};display:inline-block"></span>
-                ${zone?.name}
-              </strong>
-            </div>
+            <div class="ck-ticket-row"><span>Fecha</span><strong>${new Date(event.date).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}</strong></div>
+            <div class="ck-ticket-row"><span>Lugar</span><strong>${event.venue || event.city}</strong></div>
             <div class="ck-ticket-row"><span>Boletos</span><strong>${_qty}</strong></div>
-          <div style="text-align: center; border-style: dashed; border-color: #cbd5e1; border-width: 1px 0 0 0; padding-top: 16px; margin-top: auto; padding-bottom: 8px; cursor: pointer;" onclick="Checkout.close(); App.navigate('profile')">
-            <span class="material-symbols-outlined" style="font-size: 64px; color: #1e293b;">qr_code_2</span>
-            <div style="font-size: .75rem; color: #64748b; margin-top: 4px; font-weight: 600; letter-spacing: 1px;">VER EN MIS BOLETOS (CLIC AQUÍ)</div>
+            <div class="ck-ticket-row"><span>Total</span><strong>$${total.toLocaleString()}</strong></div>
+          </div>
+          <div class="ck-ticket-footer">
+            <button class="ck-ticket-link" onclick="Checkout.goToTickets()">Ver boletos</button>
           </div>
         </div>
 
-        <button class="ck-btn-primary" onclick="Checkout.close(); App.navigate('profile')" style="margin-bottom: 8px;">
-          Ir a mis boletos
+        <button class="ck-btn-primary" onclick="Checkout.goToTickets()" style="margin-bottom:8px;">
+          Ver boletos
         </button>
         <button class="ck-btn-secondary" onclick="Checkout.close()">
           Cerrar
         </button>
-      </div>
-    `;
-  }
-
-  // ── Acciones ───────────────────────────────
-  function selectZone(idx) {
-    _selectedZone = idx;
-    _qty = 1;
-    _render('zones');
+      </div>`;
   }
 
   function changeQty(delta) {
-    const zones = Zones.getZones(_eventId);
-    const max = zones[_selectedZone]?.capacity || 10;
-    _qty = Math.max(1, Math.min(_qty + delta, 10, max));
-    // Re-render just qty display without full re-render
+    const config = _getConfig();
+    const max = Math.max(1, Math.min(10, config.remaining || 1));
+    _qty = Math.max(1, Math.min(_qty + delta, max));
+
     document.getElementById('ck-qty-val').textContent = _qty;
-    const price = zones[_selectedZone]?.price || 0;
-    const sub = document.querySelector('.ck-subtotal');
-    if (sub) sub.innerHTML = `Subtotal: <strong>$${(price * _qty).toLocaleString()}</strong>`;
+    const subtotal = document.querySelector('.ck-subtotal');
+    if (subtotal) subtotal.innerHTML = `Subtotal: <strong>$${(config.price * _qty).toLocaleString()}</strong>`;
   }
 
   function goConfirm() {
-    if (_selectedZone === null) return;
+    const config = _getConfig();
+    if (config.remainingKnown && config.remaining <= 0) return;
     _render('confirm');
   }
 
-  function fmtCard(el) {
-    el.value = el.value.replace(/\D/g,'').slice(0,16).replace(/(.{4})(?=\d)/g,'$1 ');
+  function fmtCard(input) {
+    input.value = input.value.replace(/\D/g, '').slice(0, 16).replace(/(.{4})(?=\d)/g, '$1 ');
   }
 
-  function fmtExp(el) {
-    const c = el.value.replace(/\D/g,'').slice(0,4);
-    el.value = c.length > 2 ? c.slice(0,2) + '/' + c.slice(2) : c;
+  function fmtExp(input) {
+    const clean = input.value.replace(/\D/g, '').slice(0, 4);
+    input.value = clean.length > 2 ? `${clean.slice(0, 2)}/${clean.slice(2)}` : clean;
   }
 
   function pay() {
-    const num  = document.getElementById('ck-card-num')?.value.replace(/\s/g,'');
+    const number = document.getElementById('ck-card-num')?.value.replace(/\s/g, '');
     const name = document.getElementById('ck-card-name')?.value.trim();
-    const exp  = document.getElementById('ck-card-exp')?.value.trim();
-    const cvc  = document.getElementById('ck-card-cvc')?.value.trim();
+    const exp = document.getElementById('ck-card-exp')?.value.trim();
+    const cvc = document.getElementById('ck-card-cvc')?.value.trim();
+    const errorEl = document.getElementById('ck-err');
 
-    const errEl = document.getElementById('ck-err');
-    function showErr(msg) {
-      errEl.textContent = msg;
-      errEl.classList.remove('hidden');
+    function showErr(message) {
+      errorEl.textContent = message;
+      errorEl.classList.remove('hidden');
     }
 
-    if (num.length < 16)  { showErr('Ingresa un número de tarjeta válido (16 dígitos).'); return; }
-    if (!name)            { showErr('Ingresa el nombre del titular.'); return; }
-    if (exp.length < 5)   { showErr('Ingresa la fecha de vencimiento (MM/AA).'); return; }
-    if (cvc.length < 3)   { showErr('Ingresa el CVC (3-4 dígitos).'); return; }
+    if (number.length < 16) {
+      showErr('Ingresa un numero de tarjeta valido (16 digitos).');
+      return;
+    }
+    if (!name) {
+      showErr('Ingresa el nombre del titular.');
+      return;
+    }
+    if (exp.length < 5) {
+      showErr('Ingresa la fecha de vencimiento (MM/AA).');
+      return;
+    }
+    if (cvc.length < 3) {
+      showErr('Ingresa el CVC (3 o 4 digitos).');
+      return;
+    }
 
-    errEl.classList.add('hidden');
+    errorEl.classList.add('hidden');
+    const button = document.querySelector('.ck-btn-primary');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Procesando...';
+    }
 
-    // Simulación de pago (en producción: llamar a pasarela de pago)
-    const btn = document.querySelector('.ck-btn-primary');
-    if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
-
+    const config = _getConfig();
     setTimeout(() => {
-      const zones = typeof Zones !== 'undefined' ? Zones.getZones(_eventId) : [];
-      if (typeof Profile !== 'undefined' && Profile.addTickets) {
-        Profile.addTickets(_eventId, zones[_selectedZone]?.name || 'general', _qty);
-      }
-      _render('success');
+      void (async () => {
+        try {
+          if (typeof Profile !== 'undefined' && Profile.addTickets) {
+            await Profile.addTickets(_eventId, _qty, config.price);
+          }
+          _render('success');
+        } catch (err) {
+          console.error('[Checkout] Error registrando la compra:', err);
+          showErr('No pudimos registrar la compra en la base de datos. Intenta de nuevo.');
+          if (button) {
+            button.disabled = false;
+            button.innerHTML = `<span class="material-symbols-outlined" style="font-size:18px;vertical-align:middle;margin-right:6px">payments</span>Pagar $${(config.price * _qty).toLocaleString()}`;
+          }
+        }
+      })();
     }, 1200);
   }
 
-  return { open, close, closeOutside, selectZone, changeQty, goConfirm, pay, fmtCard, fmtExp, _render };
+  function goToTickets() {
+    close();
+    if (typeof Profile !== 'undefined' && typeof Profile.open === 'function') {
+      Profile.open();
+      return;
+    }
+    App.navigate('profile');
+  }
+
+  return {
+    open,
+    close,
+    closeOutside,
+    changeQty,
+    goConfirm,
+    pay,
+    goToTickets,
+    fmtCard,
+    fmtExp,
+    _render,
+  };
 })();

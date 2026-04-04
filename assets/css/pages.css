@@ -206,7 +206,7 @@
 .rating-stars  { display: flex; gap: 2px; margin-bottom: 2px; }
 .rating-count  { font-size: 0.72rem; color: var(--text-muted); }
 
-.about-text { font-size: 0.88rem; color: rgba(255,255,255,0.65); line-height: 1.8; }
+.about-text { font-size: 0.88rem; color: rgba(255,255,255,0.65); line-height: 1.8; white-space: pre-line; }
 
 /* Tour dates inline */
 .tour-name-label { font-size: 0.78rem; color: var(--color-pink); margin-left: 4px; }
@@ -334,16 +334,39 @@
 }
 .rating-pill-num { color: #facc15; font-weight: 700; font-size: 0.85rem; }
 
-.zone-row {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px;
+.buy-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.buy-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
   background: rgba(255,255,255,0.04);
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  margin-bottom: 8px;
 }
-.zone-dot  { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.zone-name { font-size: 0.8rem; font-weight: 500; color: rgba(255,255,255,0.75); text-transform: uppercase; margin-left: 8px; flex: 1; }
-.zone-price { font-size: 0.85rem; font-weight: 700; }
+.buy-detail-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.buy-detail-value {
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.buy-status-note {
+  padding: 12px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(251,191,36,0.2);
+  background: rgba(251,191,36,0.08);
+  color: #fbbf24;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
 
 .buy-attendees { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.72rem; color: var(--text-muted); margin-top: 12px; }

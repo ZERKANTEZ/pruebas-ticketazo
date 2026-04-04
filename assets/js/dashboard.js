@@ -1,687 +1,779 @@
-/**
- * dashboard.js — Módulo del panel de administración.
- *
- * LÓGICA NUEVA:
- *   El shell (sidebar + main) vive en index.html como HTML estático.
- *   Este módulo SOLO llena:
- *     · #db-nav        → botones según rol
- *     · #db-user-block → nombre y acciones del usuario
- *     · #panel-*       → contenido de cada pestaña
- */
-
 window.Zones = (() => {
-
-  const COLORS = [
-    '#FF69B4','#87CEEB','#8A2BE2','#facc15','#fb923c',
-    '#34d399','#f87171','#a78bfa','#60a5fa','#e879f9',
-    '#4ade80','#38bdf8','#fbbf24','#94a3b8','#f472b6',
-  ];
-
-  const FIXED_TICKET_TIERS = [
-    { key:'vip',     label:'VIP',     color:COLORS[0], price:1500, capacity:200, note:'Acceso premium' },
-    { key:'oro',     label:'Oro',     color:COLORS[3], price:1000, capacity:400, note:'Zona preferente' },
-    { key:'general', label:'General', color:COLORS[1], price:500,  capacity:1000, note:'Acceso general' },
-  ];
+  const STORAGE_KEYS = {
+    customEvents: 'ticketazo.custom-events.v1',
+    ticketState: 'ticketazo.ticket-state.v3',
+    heroSlides: 'ticketazo.hero-slides.v1',
+  };
 
   const _state = {};
+  let _customLoaded = false;
+  let _liveSales = {};
+  let _salesLoaded = false;
+  let _salesLoading = null;
+  let _salesError = '';
 
-  /* ── Init ── */
-  function init() {
-    EVENTS.forEach(ev => {
-      if (_state[ev.id]) return;
-      _state[ev.id] = { zones: _legacyZones(ev.prices), status: 'approved', note: '' };
-    });
-  }
-
-  function _legacyZones(prices) {
-    const map = { plata: COLORS[1], oro: COLORS[3], vip: COLORS[0] };
-    return Object.entries(prices || {}).map(([name, price], i) => ({
-      id: `z${i}`, name: name.charAt(0).toUpperCase() + name.slice(1),
-      price, color: map[name] || COLORS[i % COLORS.length], capacity: 500,
-    }));
-  }
-
-  /* ── Getters ── */
-  function getZones(id)    { return _state[id]?.zones  || []; }
-  function getStatus(id)   { return _state[id]?.status || 'draft'; }
-  function getMinPrice(id) { const z = getZones(id); return z.length ? Math.min(...z.map(z => z.price)) : 0; }
-  function getPending()    { return EVENTS.filter(ev => _state[ev.id]?.status === 'pending'); }
-  function _getRefundRequests() {
-    return typeof Profile !== 'undefined' && Profile.getRefundRequests
-      ? Profile.getRefundRequests()
-      : [];
-  }
-
-  /* ══════════════════════════════════════════════════════════
-     ABRIR DASHBOARD
-     Solo actualiza nav + user block, luego navega.
-     El shell HTML ya existe — no se toca.
-  ══════════════════════════════════════════════════════════ */
-  function openDashboard() {
-    if (!Auth.isLoggedIn()) { Auth.openModal(); return; }
-    const role = Auth.session().role;
-    if (!['organizer','treasurer','admin'].includes(role)) {
-      alert('No tienes acceso a este panel.'); return;
+  function _loadJSON(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (_err) {
+      return fallback;
     }
-    const tabs = _buildNav();
-    _buildUser();
-    closeSidebar();
-    App.navigate('dashboard');
-    requestAnimationFrame(() => _ensureActivePanel(tabs[0]?.key));
   }
 
-  function _getTabs(role) {
-    const pend = getPending().length;
-    const refundPend = _getRefundRequests().filter(refund => refund.status === 'pending').length;
+  function _saveJSON(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (_err) {
+      // Demo sin manejo adicional.
+    }
+  }
+
+  function _fmt(date) {
+    return new Date(date).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  function _slug(value) {
+    return String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 32);
+  }
+
+  function _toast(message, type = 'success') {
+    let toast = document.getElementById('_tz');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = '_tz';
+      toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(40px);padding:8px 20px;border-radius:999px;font-size:.8rem;font-weight:600;z-index:9999;transition:all .25s;opacity:0;white-space:nowrap;pointer-events:none';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.style.background = type === 'success' ? 'rgba(134,239,172,.15)' : 'rgba(248,113,113,.15)';
+    toast.style.border = `1px solid ${type === 'success' ? 'rgba(134,239,172,.3)' : 'rgba(248,113,113,.3)'}`;
+    toast.style.color = type === 'success' ? '#16a34a' : '#ef4444';
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateX(-50%) translateY(0)';
+    });
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(-50%) translateY(40px)';
+    }, 3000);
+  }
+
+  function _event(id) {
+    return EVENTS.find(event => event.id === id) || null;
+  }
+
+  function _persistState() {
+    _saveJSON(STORAGE_KEYS.ticketState, _state);
+  }
+
+  function _ensureArtistRecord(name, category, preferredId = '') {
+    if (preferredId && ARTISTS.some(artist => artist.id === preferredId)) return preferredId;
+    const normalized = String(name || '').trim().toLowerCase();
+    const existing = ARTISTS.find(artist => artist.name.trim().toLowerCase() === normalized);
+    if (existing) return existing.id;
+
+    const id = preferredId || `artist-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    ARTISTS.push({
+      id,
+      name: String(name || 'Artista invitado').trim(),
+      genre: category || 'Eventos en vivo',
+      image: 'assets/img/logo.png',
+      bio: 'Artista registrado desde el panel de Ticketazo.',
+      isOnTour: true,
+    });
+    return id;
+  }
+
+  function _ensureCityRecord(city) {
+    const normalized = String(city || '').trim();
+    if (!normalized) return;
+    if (!CITIES.includes(normalized)) {
+      CITIES.push(normalized);
+      CITIES.sort((left, right) => left.localeCompare(right, 'es'));
+    }
+  }
+
+  function _customEvents() {
+    return EVENTS.filter(event => event.__custom);
+  }
+
+  function _persistCustomEvents() {
+    _saveJSON(STORAGE_KEYS.customEvents, _customEvents());
+  }
+
+  function _persistHeroSlides() {
+    _saveJSON(STORAGE_KEYS.heroSlides, HERO_SLIDES.map(slide => ({ ...slide })));
+  }
+
+  function _loadHeroSlides() {
+    const storedSlides = _loadJSON(STORAGE_KEYS.heroSlides, null);
+    if (!Array.isArray(storedSlides) || !storedSlides.length) return;
+
+    const normalized = storedSlides
+      .filter(slide => slide?.eventId && _event(slide.eventId))
+      .map(slide => ({ ...slide }));
+
+    if (!normalized.length) return;
+    HERO_SLIDES.splice(0, HERO_SLIDES.length, ...normalized);
+  }
+
+  function _loadCustomEvents() {
+    if (_customLoaded) return;
+    const customEvents = _loadJSON(STORAGE_KEYS.customEvents, []);
+    customEvents.forEach(event => {
+      if (EVENTS.some(item => item.id === event.id)) return;
+      EVENTS.push(event);
+      _ensureCityRecord(event.city);
+      event.artistId = _ensureArtistRecord(event.artist, event.category, event.artistId);
+    });
+    _customLoaded = true;
+  }
+
+  async function _loadRealSales(force = false) {
+    if (_salesLoading && !force) return _salesLoading;
+    if (_salesLoaded && !force) return _liveSales;
+
+    if (typeof DB === 'undefined' || !DB.fetchEventSales) {
+      _salesLoaded = true;
+      _liveSales = Object.fromEntries(EVENTS.map(event => [event.id, { sold: 0, revenue: 0 }]));
+      return _liveSales;
+    }
+
+    _salesError = '';
+    _salesLoading = DB.fetchEventSales(EVENTS)
+      .then(summary => {
+        _liveSales = Object.fromEntries(EVENTS.map(event => {
+          const sales = summary?.[event.id] || {};
+          return [event.id, {
+            sold: Number(sales.sold || 0),
+            revenue: Number(sales.revenue || 0),
+          }];
+        }));
+        _salesLoaded = true;
+        if (document.getElementById('page-dashboard')?.classList.contains('active')) {
+          _refreshPanels();
+        }
+        Pages.refreshCurrentEvent?.();
+        return _liveSales;
+      })
+      .catch(err => {
+        console.warn('[Dashboard] No se pudieron cargar las ventas reales:', err);
+        _salesError = 'No pudimos sincronizar las ventas reales desde la base de datos.';
+        _salesLoaded = false;
+        _liveSales = {};
+        if (document.getElementById('page-dashboard')?.classList.contains('active')) {
+          _refreshPanels();
+        }
+        Pages.refreshCurrentEvent?.();
+        return _liveSales;
+      })
+      .finally(() => {
+        _salesLoading = null;
+      });
+
+    return _salesLoading;
+  }
+
+  async function _loadRealEvents() {
+    if (typeof DB === 'undefined' || !DB.fetchAllEvents) return;
+    try {
+      const dbEvents = await DB.fetchAllEvents();
+      if (!dbEvents || !dbEvents.length) return;
+      let added = false;
+      dbEvents.forEach(dbEvent => {
+        if (!EVENTS.some(e => e.id === dbEvent.id)) {
+          EVENTS.unshift(dbEvent);
+          _ensureCityRecord(dbEvent.city);
+          added = true;
+        } else {
+          // Sync organizer email if it exists
+          if (dbEvent.organizerId) {
+             const existing = EVENTS.find(e => e.id === dbEvent.id);
+             if (existing && !existing.organizerId) {
+                existing.organizerId = dbEvent.organizerId;
+             }
+          }
+        }
+      });
+      if (added) {
+        const storedState = _loadJSON(STORAGE_KEYS.ticketState, {});
+        EVENTS.forEach(event => {
+          if (!_state[event.id]) {
+            const current = storedState[event.id] || {};
+            _state[event.id] = {
+              price: Number(current.price ?? event.ticketPrice ?? 0),
+              capacity: Number(current.capacity ?? event.ticketCapacity ?? 0),
+            };
+          }
+        });
+        _persistState();
+        if (typeof Grid !== 'undefined' && Grid.build) Grid.build();
+        if (document.getElementById('page-dashboard')?.classList.contains('active')) {
+          _refreshPanels();
+        }
+      }
+    } catch (err) {
+      console.warn('[Dashboard] Fallo al sincronizar eventos reales:', err);
+    }
+  }
+
+  function init() {
+    _loadCustomEvents();
+    _loadHeroSlides();
+    const storedState = _loadJSON(STORAGE_KEYS.ticketState, {});
+    EVENTS.forEach(event => {
+      const current = storedState[event.id] || _state[event.id] || {};
+      _state[event.id] = {
+        price: Number(current.price ?? event.ticketPrice ?? 0),
+        capacity: Number(current.capacity ?? event.ticketCapacity ?? 0),
+      };
+    });
+    _persistState();
+    void _loadRealEvents().then(() => _loadRealSales());
+  }
+
+  function getTicketConfig(id) {
+    const event = _event(id);
+    const current = _state[id] || {};
+    return {
+      price: Number(current.price ?? event?.ticketPrice ?? 0),
+      capacity: Number(current.capacity ?? event?.ticketCapacity ?? 0),
+    };
+  }
+
+  function getStatus() {
+    return 'approved';
+  }
+
+  function getMinPrice(id) {
+    return getTicketConfig(id).price;
+  }
+
+  function getPending() {
+    return [];
+  }
+
+  function getSoldCount(id) {
+    if (_salesError || !_salesLoaded) return null;
+    return Number(_liveSales[id]?.sold || 0);
+  }
+
+  function getRevenue(id) {
+    if (_salesError || !_salesLoaded) return null;
+    return Number(_liveSales[id]?.revenue || 0);
+  }
+
+  function getRemainingCapacity(id) {
+    const config = getTicketConfig(id);
+    const sold = getSoldCount(id);
+    if (!Number.isFinite(sold)) return null;
+    return Math.max(config.capacity - sold, 0);
+  }
+
+  function _numberLabel(value) {
+    return Number.isFinite(value) ? value.toLocaleString() : '--';
+  }
+
+  function _moneyLabel(value) {
+    return Number.isFinite(value) ? `$${value.toLocaleString()}` : '--';
+  }
+
+  function _salesNote() {
+    if (_salesError) {
+      return `<div class="db-inline-note db-inline-note--error">${_salesError}</div>`;
+    }
+    if (_salesLoaded) {
+      return `<div class="db-inline-note">Datos sincronizados con compras reales.</div>`;
+    }
+    return `<div class="db-inline-note">Sincronizando compras reales...</div>`;
+  }
+
+  function _tabs(role) {
     if (role === 'admin') {
       return [
-        { key:'overview',  icon:Icons.chart,                   label:'Resumen General',     badge:0    },
-        { key:'events',    icon:Icons.ticket,                  label:'Todos los Eventos',   badge:0    },
-        { key:'new',       icon:Icons._icon('add_circle', 18), label:'Crear Evento',        badge:0    },
-        { key:'promote',   icon:Icons._icon('campaign', 18),   label:'Promocionar Evento',  badge:0    },
-        { key:'review',    icon:Icons._icon('fact_check', 18), label:'Revisar Precios',     badge:pend },
-        { key:'sales',     icon:Icons.chart,                   label:'Ventas por Evento',   badge:0    },
-        { key:'refunds',   icon:Icons._icon('reply', 18),      label:'Reembolsos',          badge:0    },
+        { key: 'overview', label: 'Resumen General', icon: Icons.chart },
+        { key: 'events', label: 'Todos los Eventos', icon: Icons.ticket },
+        { key: 'new', label: 'Crear Evento', icon: Icons._icon('add_circle', 18) },
+        { key: 'promote', label: 'Promocionar Evento', icon: Icons._icon('campaign', 18) },
+        { key: 'sales', label: 'Ventas por Evento', icon: Icons.chart },
+        { key: 'payouts', label: 'Pagos a Organizadores', icon: Icons.card },
       ];
     }
-
     if (role === 'treasurer') {
       return [
-        { key:'review',  icon:Icons._icon('fact_check', 18), label:'Revisar Precios',        badge:pend },
-        { key:'sales',   icon:Icons.chart,                   label:'Ventas por Evento',      badge:0    },
-        { key:'payouts', icon:Icons.card,                    label:'Pagos a Organizadores',  badge:0    },
-        { key:'refunds', icon:Icons._icon('reply', 18),      label:'Reembolsos',             badge:refundPend },
+        { key: 'sales', label: 'Ventas por Evento', icon: Icons.chart },
+        { key: 'payouts', label: 'Pagos a Organizadores', icon: Icons.card },
       ];
     }
-
     return [
-      { key:'events', icon:Icons.ticket,                  label:'Mis Eventos',  badge:0 },
-      { key:'new',    icon:Icons._icon('add_circle', 18), label:'Crear Evento', badge:0 }
+      { key: 'events', label: 'Mis Eventos', icon: Icons.ticket },
+      { key: 'new', label: 'Crear Evento', icon: Icons._icon('add_circle', 18) },
     ];
   }
 
   function _buildNav() {
-    const nav   = document.getElementById('db-nav');
+    const nav = document.getElementById('db-nav');
     if (!nav) return [];
-    const role  = Auth.session().role;
-    const tabs = _getTabs(role);
-
-    nav.innerHTML = tabs.map((t, i) => `
-        <button class="db-nav-btn${i===0?' active':''}" id="tab-${t.key}"
-          onclick="Zones.switchTab('${t.key}',this)">
-          <span class="db-nav-icon">${t.icon}</span>
-          <span class="db-nav-label">${t.label}</span>
-          ${t.badge > 0 ? `<span class="db-nav-badge">${t.badge}</span>` : ''}
-        </button>`).join('');
-
-    // Vaciar todos los paneles (el usuario puede cambiar de rol entre sesiones)
-    document.querySelectorAll('.db-panel').forEach(p => { p.classList.remove('active'); p.innerHTML = ''; });
-
-    _activatePanel(tabs[0]?.key);
+    const tabs = _tabs(Auth.session().role);
+    nav.innerHTML = tabs.map((tab, index) => `
+      <button class="db-nav-btn${index === 0 ? ' active' : ''}" id="tab-${tab.key}" onclick="Zones.switchTab('${tab.key}', this)">
+        <span class="db-nav-icon">${tab.icon}</span>
+        <span class="db-nav-label">${tab.label}</span>
+      </button>`).join('');
+    document.querySelectorAll('.db-panel').forEach(panel => {
+      panel.classList.remove('active');
+      panel.innerHTML = '';
+    });
     return tabs;
   }
 
   function _buildUser() {
-    const el = document.getElementById('db-user-block');
-    if (!el) return;
-    const sess     = Auth.session();
-    const roleIcons= { organizer:'', treasurer:'', admin:'' };
-    const roleNames= { organizer:'Organizador', treasurer:'Tesorero', admin:'Administrador' };
-    el.innerHTML = `
+    const element = document.getElementById('db-user-block');
+    if (!element) return;
+    const session = Auth.session();
+    const label = { organizer: 'Organizador', treasurer: 'Tesorero', admin: 'Administrador' }[session.role] || session.role;
+    element.innerHTML = `
       <div class="db-user-profile">
-        <div class="db-user-avatar"><span class="material-symbols-outlined" style="font-size: 24px;">person</span></div>
+        <div class="db-user-avatar"><span class="material-symbols-outlined" style="font-size:24px;">person</span></div>
         <div class="db-user-info">
-          <div class="db-user-name">${sess.name}</div>
-          <div class="db-user-role">${roleIcons[sess.role]||''} ${roleNames[sess.role]||sess.role}</div>
+          <div class="db-user-name">${session.name}</div>
+          <div class="db-user-role">${label}</div>
         </div>
       </div>
       <div class="db-user-actions">
-        <button class="db-user-action-btn" onclick="Profile.open()"><span class="material-symbols-outlined" style="font-size: 18px;">manage_accounts</span> Mi Cuenta</button>
-        <button class="db-user-action-btn" style="color: #f87171;" onclick="Auth.logout()"><span class="material-symbols-outlined" style="font-size: 18px;">logout</span> Cerrar Sesión</button>
+        <button class="db-user-action-btn" onclick="Profile.open()"><span class="material-symbols-outlined" style="font-size:18px;">manage_accounts</span> Mi Cuenta</button>
+        <button class="db-user-action-btn" style="color:#f87171;" onclick="Auth.logout()"><span class="material-symbols-outlined" style="font-size:18px;">logout</span> Cerrar Sesion</button>
       </div>`;
   }
 
-  /* ══════════════════════════════════════════════════════════
-     CAMBIO DE PESTAÑA
-  ══════════════════════════════════════════════════════════ */
-  function switchTab(key, btn) {
-    // 1. Nav buttons
-    document.querySelectorAll('.db-nav-btn').forEach(b => b.classList.remove('active'));
-    if (btn) btn.classList.add('active');
-
-    _activatePanel(key);
-
-    if (window.innerWidth <= 900) {
-      closeSidebar();
-    }
-  }
-
   function _panelTitle(key) {
-    const titles = {
-      events:'Todos los Eventos',
-      new:'Crear Evento',
-      review:'Revisión de Precios',
-      sales:'Ventas por Evento',
-      promote:'Promocionar Evento',
-      overview:'Resumen General',
-      refunds:'Reembolsos',
-      payouts:'Pagos a Organizadores',
-    };
-    return titles[key] || 'Panel de Control';
-  }
-
-  function _activatePanel(key) {
-    if (!key) return null;
-
-    document.querySelectorAll('.db-panel').forEach(p => p.classList.remove('active'));
-    const panel = document.getElementById(`panel-${key}`);
-    if (!panel) return null;
-
-    panel.classList.add('active');
-    if (panel.innerHTML.trim() === '') {
-      panel.innerHTML = _panelContent(key);
-    }
-
-    const titleEl = document.getElementById('db-topbar-title');
-    if (titleEl) titleEl.textContent = _panelTitle(key);
-
-    const content = document.querySelector('.db-content');
-    if (content) content.scrollTo({ top: 0, behavior: 'auto' });
-
-    return panel;
-  }
-
-  function _ensureActivePanel(fallbackKey) {
-    const activePanel = document.querySelector('.db-panel.active');
-    if (activePanel) {
-      if (activePanel.innerHTML.trim() === '') {
-        activePanel.innerHTML = _panelContent(activePanel.id.replace('panel-', ''));
-      }
-      return activePanel;
-    }
-
-    return _activatePanel(fallbackKey);
+    return {
+      overview: 'Resumen General',
+      events: 'Eventos',
+      new: 'Crear Evento',
+      promote: 'Promocionar Evento',
+      sales: 'Ventas por Evento',
+      payouts: 'Pagos a Organizadores',
+    }[key] || 'Panel de Control';
   }
 
   function _panelContent(key) {
-    const map = {
-      events: _renderMyEvents, new: _renderCreateForm,
-      review: _renderReview,   sales: _renderSales,
-      promote:_renderPromote,  overview:_renderOverview, 
-      refunds:_renderRefunds, payouts:_renderPayouts,
-    };
-    return map[key] ? map[key]() : '';
+    return {
+      overview: _renderOverview,
+      events: _renderEvents,
+      new: _renderCreateForm,
+      promote: _renderPromote,
+      sales: _renderSales,
+      payouts: _renderPayouts,
+    }[key]?.() || '';
   }
 
-  /* ── Sidebar mobile ── */
+  function _activatePanel(key) {
+    if (!key) return;
+    document.querySelectorAll('.db-panel').forEach(panel => panel.classList.remove('active'));
+    const panel = document.getElementById(`panel-${key}`);
+    if (!panel) return;
+    panel.classList.add('active');
+    panel.innerHTML = _panelContent(key);
+    const title = document.getElementById('db-topbar-title');
+    if (title) title.textContent = _panelTitle(key);
+  }
+
+  function switchTab(key, button) {
+    document.querySelectorAll('.db-nav-btn').forEach(item => item.classList.remove('active'));
+    if (button) button.classList.add('active');
+    _activatePanel(key);
+    if (window.innerWidth <= 900) closeSidebar();
+  }
+
+  function openDashboard() {
+    if (!Auth.isLoggedIn()) {
+      Auth.openModal();
+      return;
+    }
+    const role = Auth.session().role;
+    if (!['organizer', 'treasurer', 'admin'].includes(role)) {
+      alert('No tienes acceso a este panel.');
+      return;
+    }
+    init();
+    const tabs = _buildNav();
+    _buildUser();
+    closeSidebar();
+    App.navigate('dashboard');
+    requestAnimationFrame(() => _activatePanel(tabs[0]?.key));
+  }
+
   function openSidebar() {
     if (window.innerWidth > 900) return;
     document.getElementById('db-sidebar')?.classList.add('open');
     document.getElementById('db-overlay')?.classList.add('open');
   }
+
   function closeSidebar() {
     document.getElementById('db-sidebar')?.classList.remove('open');
     document.getElementById('db-overlay')?.classList.remove('open');
   }
 
-  /* ══════════════════════════════════════════════════════════
-     ORGANIZADOR — MIS EVENTOS
-  ══════════════════════════════════════════════════════════ */
-  function _renderPromote() {
-    const activeEvents = EVENTS.filter(e => e.status !== 'expired');
+  function _ownerEvents() {
+    return Auth.session().role === 'admin'
+      ? EVENTS
+      : EVENTS.filter(event => event.organizerId === Auth.session().email);
+  }
+
+  function _manageCard(event) {
+    const config = getTicketConfig(event.id);
+    const sold = getSoldCount(event.id);
+    const remaining = getRemainingCapacity(event.id);
     return `
-      <div class="db-page-header">
-        <div><h1>Promocionar Evento</h1><p>Elige un evento para destacarlo en el carrusel del inicio.</p></div>
+      <div class="db-card db-manage-card">
+        <div class="db-card-head">
+          <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1">
+            <img src="${event.image}" alt="${event.title}" style="width:56px;height:56px;border-radius:10px;object-fit:cover"/>
+            <div style="min-width:0">
+              <div class="db-card-title">${event.title}</div>
+              <div style="font-size:.78rem;color:#64748b;margin-top:4px">${event.city} · ${_fmt(event.date)}</div>
+            </div>
+          </div>
+          <span class="db-badge approved">Publicado</span>
+        </div>
+        <div class="db-card-body">
+          <div class="db-manage-grid">
+            <div class="db-field"><label class="db-label">Precio del boleto</label><input class="db-input" type="number" min="0" value="${config.price}" oninput="Zones.setTicketField('${event.id}','price',this.value)"/></div>
+            <div class="db-field"><label class="db-label">Capacidad disponible</label><input class="db-input" type="number" min="1" value="${config.capacity}" oninput="Zones.setTicketField('${event.id}','capacity',this.value)"/></div>
+          </div>
+          <div class="db-manage-metrics">
+            <div class="db-manage-metric"><span>Vendidos reales</span><strong>${_numberLabel(sold)}</strong></div>
+            <div class="db-manage-metric"><span>Disponibles</span><strong>${_numberLabel(remaining)}</strong></div>
+          </div>
+          <div class="db-manage-actions">
+            <button class="db-btn db-btn-primary" onclick="Zones.saveTicketConfig('${event.id}')">Guardar cambios</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function _renderEvents() {
+    const events = _ownerEvents();
+    const totals = events.reduce((acc, event) => {
+      const config = getTicketConfig(event.id);
+      const sold = getSoldCount(event.id);
+      const revenue = getRevenue(event.id);
+      acc.capacity += config.capacity;
+      acc.sold += Number.isFinite(sold) ? sold : 0;
+      acc.revenue += Number.isFinite(revenue) ? revenue : 0;
+      return acc;
+    }, { capacity: 0, sold: 0, revenue: 0 });
+
+    return `
+      <div class="db-page-header"><div><h1>${Auth.session().role === 'admin' ? 'Todos los Eventos' : 'Mis Eventos'}</h1><p>Administra precio y capacidad sin revision intermedia.</p>${_salesNote()}</div></div>
+      <div class="db-stats">
+        <div class="db-stat blue"><div class="db-stat-icon">${Icons._icon('event', 24)}</div><div><div class="db-stat-label">Eventos</div><div class="db-stat-value">${events.length}</div></div></div>
+        <div class="db-stat green"><div class="db-stat-icon">${Icons._icon('confirmation_number', 24)}</div><div><div class="db-stat-label">Vendidos</div><div class="db-stat-value">${_salesLoaded ? totals.sold.toLocaleString() : '--'}</div></div></div>
+        <div class="db-stat purple"><div class="db-stat-icon">${Icons._icon('inventory', 24)}</div><div><div class="db-stat-label">Capacidad</div><div class="db-stat-value">${totals.capacity.toLocaleString()}</div></div></div>
+        <div class="db-stat pink"><div class="db-stat-icon">${Icons._icon('attach_money', 24)}</div><div><div class="db-stat-label">Ingresos</div><div class="db-stat-value">${_salesLoaded ? _moneyLabel(totals.revenue) : '--'}</div></div></div>
       </div>
+      ${events.length ? events.map(event => _manageCard(event)).join('') : `<div class="db-empty"><div class="db-empty-icon"></div><div class="db-empty-text">Aun no tienes eventos creados.</div></div>`}`;
+  }
+
+  function _renderCreateForm() {
+    if (Auth.session().role === 'organizer' && !Profile.hasCard()) {
+      return `
+        <div class="db-card" style="text-align:center;padding:40px 20px;">
+          <div style="font-size:3rem;margin-bottom:16px;"><span class="material-symbols-outlined" style="font-size:48px;color:#ca8a04;">account_balance</span></div>
+          <div style="font-weight:700;font-size:1.1rem;color:#1e293b;margin-bottom:8px;">Se requiere cuenta bancaria</div>
+          <div style="font-size:0.88rem;color:#64748b;margin-bottom:20px;max-width:420px;margin-left:auto;margin-right:auto;">Para crear y publicar eventos, primero debes registrar tu CLABE en tu perfil.</div>
+          <button class="db-btn db-btn-primary" onclick="Profile.open()">Registrar Cuenta Bancaria</button>
+        </div>`;
+    }
+
+    return `
+      <div class="db-page-header"><div><h1>Crear Nuevo Evento</h1><p>La publicacion ahora es directa, sin tesorero ni revision.</p></div></div>
+      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Informacion General</div></div><div class="db-card-body">
+        <div class="db-grid2">
+          <div class="db-field"><label class="db-label">Nombre del Evento</label><input class="db-input" id="db-new-title" type="text" placeholder="Ej. Gran Premio de F1"/></div>
+          <div class="db-field"><label class="db-label">Artista / Organizador Principal</label><input class="db-input" id="db-new-artist" type="text" placeholder="Nombre del artista o franquicia"/></div>
+          <div class="db-field"><label class="db-label">Nombre de Gira</label><input class="db-input" id="db-new-tour" type="text" placeholder="Opcional"/></div>
+          <div class="db-field"><label class="db-label">Categoria</label><select class="db-select" id="db-new-category"><option value="">Selecciona...</option>${CATEGORIES.filter(category => category !== 'Todos').map(category => `<option>${category}</option>`).join('')}</select></div>
+          <div class="db-field"><label class="db-label">Fecha</label><input class="db-input" id="db-new-date" type="date"/></div>
+          <div class="db-field"><label class="db-label">Hora</label><input class="db-input" id="db-new-time" type="time" value="20:00"/></div>
+          <div class="db-field"><label class="db-label">Ciudad</label><input class="db-input" id="db-new-city" type="text" placeholder="Ciudad"/></div>
+          <div class="db-field"><label class="db-label">Recinto</label><input class="db-input" id="db-new-venue" type="text" placeholder="Ej. Autodromo Hermanos Rodriguez"/></div>
+        </div>
+      </div></div>
+      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Imagen Promocional</div></div><div class="db-card-body">
+        <div class="db-upload" id="db-upload-area" onclick="document.getElementById('db-file-input').click()" ondragover="event.preventDefault(); this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="Zones.handleDrop(event, this)">
+          <input type="file" id="db-file-input" style="display:none" accept="image/*" onchange="Zones.handleFileSelect(this, document.getElementById('db-upload-area'))"/>
+          <div class="db-upload-icon">${Icons._icon('cloud_upload', 40)}</div>
+          <div class="db-upload-text">Arrastra o haz clic para subir imagen</div>
+          <div class="db-upload-hint">JPG, PNG, WEBP · Max. 10 MB</div>
+        </div>
+      </div></div>
+      <div class="db-card"><div class="db-card-head db-create-ticket-head"><div class="db-card-title">${Icons.ticket} Boletaje</div><span class="db-create-ticket-note">Solo un precio unico y una capacidad total.</span></div><div class="db-card-body">
+        <div class="db-grid2">
+          <div class="db-field"><label class="db-label">Precio del boleto</label><input class="db-input" id="db-new-price" type="number" min="0" placeholder="Ej. 850"/></div>
+          <div class="db-field"><label class="db-label">Capacidad disponible</label><input class="db-input" id="db-new-capacity" type="number" min="1" placeholder="Ej. 1200"/></div>
+        </div>
+      </div></div>
+      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Descripcion</div></div><div class="db-card-body"><textarea class="db-textarea" id="db-new-about" rows="4" placeholder="Describe el evento..."></textarea></div></div>
+      <div class="db-create-actions"><button class="db-btn db-btn-secondary" onclick="Zones.resetCreateForm()">Limpiar</button><button class="db-btn db-btn-primary" id="db-create-submit" onclick="Zones.createEvent()">Publicar evento</button></div>`;
+  }
+
+  function _renderSales() {
+    const rows = EVENTS.filter(event => event.status !== 'expired')
+      .map(event => {
+        const config = getTicketConfig(event.id);
+        const sold = getSoldCount(event.id);
+        const revenue = getRevenue(event.id);
+        return { ...event, price: config.price, capacity: config.capacity, sold, revenue };
+      })
+      .sort((left, right) => (Number(right.revenue || 0) - Number(left.revenue || 0)));
+    const totalRevenue = rows.reduce((sum, row) => sum + (Number.isFinite(row.revenue) ? row.revenue : 0), 0);
+    const totalSold = rows.reduce((sum, row) => sum + (Number.isFinite(row.sold) ? row.sold : 0), 0);
+    return `
+      <div class="db-page-header"><div><h1>Ventas por Evento</h1><p>Resumen basado en compras reales registradas en la base de datos.</p>${_salesNote()}</div></div>
+      <div class="db-stats">
+        <div class="db-stat blue"><div class="db-stat-icon">${Icons._icon('confirmation_number', 24)}</div><div><div class="db-stat-label">Boletos vendidos</div><div class="db-stat-value">${_salesLoaded ? totalSold.toLocaleString() : '--'}</div></div></div>
+        <div class="db-stat green"><div class="db-stat-icon">${Icons._icon('attach_money', 24)}</div><div><div class="db-stat-label">Ingresos</div><div class="db-stat-value">${_salesLoaded ? _moneyLabel(totalRevenue) : '--'}</div></div></div>
+        <div class="db-stat purple"><div class="db-stat-icon">${Icons._icon('inventory', 24)}</div><div><div class="db-stat-label">Eventos activos</div><div class="db-stat-value">${rows.length}</div></div></div>
+      </div>
+      <div class="db-card"><div class="db-table-wrap"><table class="db-table"><thead><tr><th>Evento</th><th>Precio</th><th>Capacidad</th><th>Vendidos</th><th>Ingresos</th></tr></thead><tbody>
+        ${rows.map(row => `<tr><td><div style="font-weight:700">${row.title}</div><div style="font-size:.72rem;color:#64748b">${row.city}</div></td><td>$${row.price.toLocaleString()}</td><td>${row.capacity.toLocaleString()}</td><td>${_numberLabel(row.sold)}</td><td style="font-weight:700">${_moneyLabel(row.revenue)}</td></tr>`).join('')}
+      </tbody></table></div></div>`;
+  }
+
+  function _renderPromote() {
+    const active = EVENTS.filter(event => event.status !== 'expired');
+    return `
+      <div class="db-page-header"><div><h1>Promocionar Evento</h1><p>Elige un evento para destacarlo en el carrusel del inicio.</p></div></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px">
-        ${activeEvents.map(ev => {
-          const inCarousel = HERO_SLIDES.some(s => s.eventId === ev.id);
-          return `
-            <div style="background:#fff;border:1px solid ${inCarousel?'rgba(138,43,226,.4)':'#e2e8f0'};border-radius:14px;overflow:hidden;transition:box-shadow .2s;${inCarousel?'box-shadow:0 0 0 2px rgba(138,43,226,.2)':''}">
-              <div style="position:relative;height:130px;overflow:hidden">
-                <img src="${ev.image}" alt="${ev.title}" style="width:100%;height:100%;object-fit:cover"/>
-                ${inCarousel ? '<div style="position:absolute;top:8px;right:8px;background:rgba(138,43,226,.9);color:#fff;font-size:.65rem;font-weight:700;padding:3px 9px;border-radius:999px">En carrusel</div>' : ''}
-              </div>
-              <div style="padding:12px">
-                <div style="font-size:.8rem;font-weight:700;color:#0f172a;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${ev.title}</div>
-                <div style="font-size:.7rem;color:#64748b;margin-bottom:10px">${ev.artist} · ${ev.city}</div>
-                <button
-                  class="db-btn ${inCarousel ? 'db-btn-secondary' : 'db-btn-primary'}"
-                  style="width:100%;font-size:.75rem"
-                  onclick="Zones.promoteToCarousel('${ev.id}')"
-                  ${inCarousel ? 'disabled' : ''}>
-                  <span class="material-symbols-outlined" style="font-size:14px;vertical-align:middle;margin-right:4px">${inCarousel?'check_circle':'campaign'}</span>
-                  ${inCarousel ? 'Ya en Carrusel' : 'Promocionar'}
-                </button>
-              </div>
-            </div>`;
+        ${active.map(event => {
+          const featured = HERO_SLIDES.some(slide => slide.eventId === event.id);
+          return `<div style="background:#fff;border:1px solid ${featured ? 'rgba(138,43,226,.4)' : '#e2e8f0'};border-radius:14px;overflow:hidden;${featured ? 'box-shadow:0 0 0 2px rgba(138,43,226,.2)' : ''}"><div style="position:relative;height:130px;overflow:hidden"><img src="${event.image}" alt="${event.title}" style="width:100%;height:100%;object-fit:cover"/>${featured ? '<div style="position:absolute;top:8px;right:8px;background:rgba(138,43,226,.9);color:#fff;font-size:.65rem;font-weight:700;padding:3px 9px;border-radius:999px">En carrusel</div>' : ''}</div><div style="padding:12px"><div style="font-size:.8rem;font-weight:700;color:#0f172a;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${event.title}</div><div style="font-size:.7rem;color:#64748b;margin-bottom:10px">${event.artist} · ${event.city}</div><button class="db-btn ${featured ? 'db-btn-secondary' : 'db-btn-primary'}" style="width:100%;font-size:.75rem" onclick="Zones.promoteToCarousel('${event.id}')" ${featured ? 'disabled' : ''}>${featured ? 'Ya en Carrusel' : 'Promocionar'}</button></div></div>`;
         }).join('')}
       </div>`;
   }
 
-  function _renderMyEvents() {
-    const isAdmin  = Auth.session().role === 'admin';
-    const email    = Auth.session().email;
-    const myEvents = isAdmin
-      ? EVENTS
-      : EVENTS.filter(e => e.organizerId === email || e.organizerId === 'eber.higuera@gmail.com');
-    const approved = myEvents.filter(e => (_state[e.id]?.status||'draft') === 'approved').length;
-    const pending  = myEvents.filter(e => (_state[e.id]?.status||'draft') === 'pending').length;
+  function _bankInfo(email) {
+    return {
+      'eber.higuera@gmail.com': { name: 'Eber Higuera', bankName: 'BBVA', clabe: '012 180 01534007821 9' },
+      'other.organizer@gmail.com': { name: 'Compania Teatral Elite', bankName: 'Santander', clabe: '014 180 00000000930 2' },
+    }[email] || { name: email, bankName: 'Banco pendiente', clabe: 'Sin CLABE registrada' };
+  }
+
+  function _renderPayouts() {
+    const groups = {};
+    EVENTS.filter(event => event.status !== 'expired').forEach(event => {
+      const email = event.organizerId || 'sin-organizador@ticketazo.mx';
+      const gross = getRevenue(event.id);
+      if (!groups[email]) groups[email] = { ..._bankInfo(email), email, gross: 0, events: [] };
+      groups[email].gross += Number.isFinite(gross) ? gross : 0;
+      groups[email].events.push({
+        title: event.title,
+        revenue: gross,
+      });
+    });
     return `
-      <div class="db-page-header">
-        <div><h1>${isAdmin ? 'Todos los Eventos' : 'Mis Eventos'}</h1><p>Gestiona los eventos y define los niveles de boletos.</p></div>
-      </div>
+      <div class="db-page-header"><div><h1>Pagos a Organizadores</h1><p>Consulta la informacion bancaria y distribuye ingresos reales.</p>${_salesNote()}</div></div>
+      ${Object.values(groups).map(group => {
+        const fee = Math.round(group.gross * 0.05);
+        const payout = group.gross - fee;
+        return `<div class="db-card db-payout-card"><div class="db-card-head db-payout-head"><div class="db-payout-profile"><div class="db-payout-avatar">${Icons._icon('person', 24)}</div><div class="db-payout-meta"><div class="db-card-title">${group.name}</div><div class="db-payout-email">${group.email}</div></div></div></div><div class="db-card-body"><div class="db-payout-bank"><div class="db-payout-bank-copy"><div class="db-payout-bank-label">Cuenta bancaria registrada</div><div class="db-payout-bank-name"><span class="material-symbols-outlined" style="font-size:14px;color:#8B5CF6">account_balance</span>${group.bankName}</div><div class="db-payout-clabe">${group.clabe}</div></div><button class="db-btn db-btn-secondary db-payout-copy" onclick="Zones.copyBankNumber('${group.clabe}')">Copiar CLABE</button></div><div class="db-payout-stats"><div class="db-stat blue"><div class="db-stat-icon">${Icons._icon('account_balance', 22)}</div><div><div class="db-stat-label">Ingresos Brutos</div><div class="db-stat-value">${_salesLoaded ? _moneyLabel(group.gross) : '--'}</div></div></div><div class="db-stat pink"><div class="db-stat-icon">%</div><div><div class="db-stat-label">Comision 5%</div><div class="db-stat-value db-payout-minus">${_salesLoaded ? `-${_moneyLabel(fee)}` : '--'}</div></div></div><div class="db-stat green"><div class="db-stat-icon">${Icons._icon('wallet', 22)}</div><div><div class="db-stat-label">A Transferir</div><div class="db-stat-value db-payout-plus">${_salesLoaded ? _moneyLabel(payout) : '--'}</div></div></div></div><div class="db-payout-events-label">Eventos generadores de saldo:</div><div class="db-payout-events">${group.events.map(item => `<span class="db-payout-event"><span>${Icons.ticket}</span>${item.title}${_salesLoaded ? ` | ${_moneyLabel(item.revenue)}` : ''}</span>`).join('')}</div></div></div>`;
+      }).join('')}`;
+  }
+
+  function _renderOverview() {
+    const activeEvents = EVENTS.filter(event => event.status !== 'expired');
+    const sold = activeEvents.reduce((sum, event) => sum + (Number.isFinite(getSoldCount(event.id)) ? getSoldCount(event.id) : 0), 0);
+    const projected = activeEvents.reduce((sum, event) => sum + (Number.isFinite(getRevenue(event.id)) ? getRevenue(event.id) : 0), 0);
+    const organizers = new Set(activeEvents.map(event => event.organizerId).filter(Boolean)).size;
+    return `
+      <div class="db-page-header"><div><h1>Centro de Control</h1><p>Operacion directa sin revision manual.</p>${_salesNote()}</div><div style="background:rgba(138,43,226,.08);color:#8A2BE2;padding:6px 14px;border-radius:9px;font-size:.78rem;font-weight:700;border:1px solid rgba(138,43,226,.15)">Operativa</div></div>
       <div class="db-stats">
-        <div class="db-stat blue"><div class="db-stat-icon">${Icons._icon('event', 24)}</div><div><div class="db-stat-label">Eventos Activos</div><div class="db-stat-value">${myEvents.length}</div></div></div>
-        <div class="db-stat green"><div class="db-stat-icon">${Icons._icon('check_circle', 24)}</div><div><div class="db-stat-label">Eventos Aprobados</div><div class="db-stat-value">${approved}</div></div></div>
-        <div class="db-stat purple"><div class="db-stat-icon">${Icons._icon('pending', 24)}</div><div><div class="db-stat-label">En Revisión</div><div class="db-stat-value">${pending}</div></div></div>
+        <div class="db-stat blue"><div class="db-stat-icon">${Icons._icon('event', 24)}</div><div><div class="db-stat-label">Eventos activos</div><div class="db-stat-value">${activeEvents.length}</div></div></div>
+        <div class="db-stat purple"><div class="db-stat-icon">${Icons._icon('groups', 24)}</div><div><div class="db-stat-label">Organizadores</div><div class="db-stat-value">${organizers}</div></div></div>
+        <div class="db-stat green"><div class="db-stat-icon">${Icons._icon('confirmation_number', 24)}</div><div><div class="db-stat-label">Vendidos</div><div class="db-stat-value">${_salesLoaded ? sold.toLocaleString() : '--'}</div></div></div>
+        <div class="db-stat pink"><div class="db-stat-icon">${Icons._icon('attach_money', 24)}</div><div><div class="db-stat-label">Ingresos</div><div class="db-stat-value">${_salesLoaded ? _moneyLabel(projected) : '--'}</div></div></div>
       </div>
-      ${myEvents.length
-        ? myEvents.map(ev => _eventCard(ev)).join('')
-        : `<div class="db-empty"><div class="db-empty-icon"></div><div class="db-empty-text">Aún no tienes eventos creados.</div></div>`}`;
+      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Ultimos eventos publicados</div></div><div class="db-card-body">
+        ${activeEvents.slice().sort((left, right) => new Date(right.date) - new Date(left.date)).slice(0, 5).map(event => `<div style="display:flex;align-items:center;justify-content:space-between;padding:11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;margin-bottom:7px;flex-wrap:wrap;gap:7px"><div style="display:flex;align-items:center;gap:9px"><img src="${event.image}" style="width:36px;height:36px;border-radius:7px;object-fit:cover"/><div><div style="font-size:.82rem;font-weight:600;color:#0f172a">${event.title}</div><div style="font-size:.7rem;color:#64748b">${event.organizerId || 'Sin organizador'}</div></div></div><span class="db-badge approved">Publicado</span></div>`).join('') || `<div class="db-empty"><div class="db-empty-icon"></div><div class="db-empty-text">Sin eventos cargados.</div></div>`}
+      </div></div>`;
   }
 
-  function _eventCard(ev) {
-    const st     = _state[ev.id] || {};
-    const status = st.status || 'draft';
-    const canEdit= status === 'draft' || status === 'rejected';
-    const labels = {approved:'Aprobado',pending:'⏳ En revisión',rejected:'Rechazado',draft:'Borrador'};
-    const note   = st.note ? `<div class="db-rejection"><strong>Nota del tesorero:</strong> ${st.note}</div>` : '';
-    return `
-      <div class="db-event-card" id="evc-${ev.id}">
-        <div class="db-event-card-head" onclick="Zones.toggleExpand('${ev.id}')">
-          <div class="db-event-thumb"><img src="${ev.image}" alt="${ev.title}" loading="lazy"/></div>
-          <div class="db-event-info">
-            <div class="db-event-name">${ev.title}</div>
-            <div class="db-event-meta">${ev.city} · ${_fmt(ev.date)}</div>
-          </div>
-          <span class="db-badge ${status}">${labels[status]}</span>
-          <span class="db-expand" id="exp-${ev.id}">${Icons._icon('expand_more', 16)}</span>
-        </div>
-        ${status==='approved' && Auth.session().role==='admin' ? `
-          <div style="padding:10px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span style="font-size:0.75rem;color:#64748b;">Acciones de Administrador:</span>
-            <button class="db-btn" style="background:linear-gradient(90deg,#f59e0b,#ef4444);color:#fff;font-size:0.75rem;padding:5px 12px;" onclick="event.stopPropagation();Zones.promoteToCarousel('${ev.id}')">
-              <span class="material-symbols-outlined" style="font-size:14px;vertical-align:middle;margin-right:4px">campaign</span>Promocionar en Inicio
-            </button>
-          </div>` : ''}
-        <div class="db-zone-builder" id="zb-${ev.id}">
-          ${note}
-          ${canEdit ? _zoneEditor(ev.id, st.zones||[]) : _zoneReadonly(st.zones||[], status)}
-        </div>
-      </div>`;
+  function setTicketField(id, field, value) {
+    if (!_state[id]) init();
+    _state[id][field] = Math.max(field === 'capacity' ? 1 : 0, Number(value || 0));
+    _persistState();
   }
 
-  function toggleExpand(id) {
-    document.getElementById(`zb-${id}`)?.classList.toggle('open');
-    document.getElementById(`exp-${id}`)?.classList.toggle('open');
-  }
-
-  function _zoneEditor(eventId, zones) {
-    const rows = zones.map((z, i) => `
-      <div class="db-zone-row" id="zrow-${eventId}-${i}">
-        <div class="dz-dot" style="background:${z.color}" onclick="Zones.pickColor('${eventId}',${i},this)"></div>
-        <input class="dz-input" type="text"   placeholder="Nombre"    value="${z.name}"     oninput="Zones.setField('${eventId}',${i},'name',this.value)"/>
-        <input class="dz-input" type="number" placeholder="Precio"    value="${z.price}"    oninput="Zones.setField('${eventId}',${i},'price',+this.value)" min="0"/>
-        <input class="dz-input" type="number" placeholder="Capacidad" value="${z.capacity}" oninput="Zones.setField('${eventId}',${i},'capacity',+this.value)" min="1"/>
-        <button class="dz-del" onclick="Zones.deleteZone('${eventId}',${i})"></button>
-      </div>`).join('');
-    return `
-      <div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:10px"><span style="display:inline-flex;margin-right:6px;vertical-align:text-bottom">${Icons.ticket}</span> Niveles de Boletos</div>
-      <div class="db-zone-rows" id="zrows-${eventId}">${rows}</div>
-      <button class="db-add-zone" onclick="Zones.addZone('${eventId}')">＋ Agregar nivel</button>
-      <div class="db-zone-actions">
-        <button class="db-btn db-btn-secondary" onclick="Zones.toggleExpand('${eventId}')">Cancelar</button>
-        <button class="db-btn db-btn-primary"   onclick="Zones.submitZones('${eventId}')">Guardar y enviar <span class="material-symbols-outlined" style="font-size: 14px; margin-left:6px; vertical-align: middle;">arrow_forward</span></button>
-      </div>`;
-  }
-
-  function _zoneReadonly(zones, status) {
-    const pill = {pending:'<span class="db-status-pill pending">⏳ Esperando aprobación</span>',approved:'<span class="db-status-pill approved">Precios aprobados</span>'}[status]||'';
-    return `<div style="margin-bottom:10px">${pill}</div><div class="db-zone-preview">${zones.map(z=>`
-      <div class="db-zone-preview-row">
-        <div class="db-zone-preview-left"><div class="db-dot-sm" style="background:${z.color}"></div><span class="db-zone-preview-name">${z.name}</span><span class="db-zone-preview-cap">(${z.capacity.toLocaleString()})</span></div>
-        <span class="db-zone-preview-price">$${z.price.toLocaleString()}</span>
-      </div>`).join('')}</div>`;
-  }
-
-  function addZone(eventId) {
-    if (!_state[eventId]) _state[eventId]={zones:[],status:'draft',note:''};
-    _state[eventId].zones.push({id:`z${Date.now()}`,name:'',price:0,color:COLORS[_state[eventId].zones.length%COLORS.length],capacity:500});
-    _refreshCard(eventId);
-  }
-
-  function promoteToCarousel(eventId) {
-    const ev = EVENTS.find(e => e.id === eventId);
-    if (!ev) return;
-    // Comprobar si ya está en los slides del hero
-    const already = HERO_SLIDES.some(s => s.eventId === eventId);
-    if (already) {
-      _toast('Este evento ya está en el carrusel del inicio', 'success');
+  async function saveTicketConfig(id) {
+    const event = _event(id);
+    const state = _state[id];
+    if (!event || !state || state.price <= 0 || state.capacity <= 0) {
+      alert('Completa un precio valido y una capacidad mayor a cero.');
       return;
     }
-    // Agregar slide dinámico
-    HERO_SLIDES.push({
-      title:   ev.title,
-      sub:     `${ev.artist} — ${ev.city}`,
-      cta:     `Ver ${ev.title}`,
-      eventId: ev.id,
-      image:   ev.image,
-    });
-    // Reiniciar carrusel con nuevos slides
-    Carousel.init();
-    _toast(`"${ev.title}" ahora aparece en el carrusel`, 'success');
-    // Refrescar el panel de promover para actualizar estado de botones
-    const panel = document.getElementById('panel-promote');
-    if (panel && panel.classList.contains('active')) {
-      panel.innerHTML = _renderPromote();
+
+    event.ticketPrice = Number(state.price);
+    event.ticketCapacity = Number(state.capacity);
+    _persistState();
+    if (event.__custom) {
+      _persistCustomEvents();
     }
-  }
-  function deleteZone(eventId, idx) { _state[eventId]?.zones.splice(idx,1); _refreshCard(eventId); }
-  function setField(eventId, idx, field, val) { if (_state[eventId]?.zones[idx]) _state[eventId].zones[idx][field]=val; }
-  function submitZones(eventId) {
-    const st=_state[eventId];
-    if (!st) return;
-    if (st.zones.some(z=>!z.name.trim()||z.price<=0||z.capacity<=0)){alert('Completa todos los niveles.');return;}
-    if (!st.zones.length){alert('Agrega al menos un nivel.');return;}
-    st.status='pending';st.note='';
-    _refreshCard(eventId);
-    _toast('Enviado al tesorero','success');
-  }
-  function _refreshCard(eventId) {
-    const ev=EVENTS.find(e=>e.id===eventId);
-    const card=document.getElementById(`evc-${eventId}`);
-    if (!ev||!card) return;
-    const open=document.getElementById(`zb-${eventId}`)?.classList.contains('open');
-    card.outerHTML=_eventCard(ev);
-    if (open){document.getElementById(`zb-${eventId}`)?.classList.add('open');document.getElementById(`exp-${eventId}`)?.classList.add('open');}
-  }
-
-  function pickColor(eventId, idx, dotEl) {
-    _showColorPicker(dotEl, c=>{setField(eventId,idx,'color',c);dotEl.style.background=c;});
-  }
-  function pickColorNewLegacy(i, dotEl) { _showColorPicker(dotEl, c=>{dotEl.style.background=c;}); }
-  function _showColorPicker(dotEl, onPick) {
-    document.getElementById('_cp')?.remove();
-    const pop=document.createElement('div');pop.className='dz-color-picker';pop.id='_cp';
-    COLORS.forEach(c=>{
-      const o=document.createElement('div');o.className='dz-color-opt';o.style.background=c;
-      o.onmousedown=e=>{e.stopPropagation();onPick(c);pop.remove();};
-      pop.appendChild(o);
-    });
-    document.body.appendChild(pop);
-    const r=dotEl.getBoundingClientRect();
-    pop.style.top=(r.bottom+5)+'px';
-    pop.style.left=Math.min(r.left,window.innerWidth-180)+'px';
-    setTimeout(()=>{document.addEventListener('click',function h(e){if(!pop.contains(e.target)){pop.remove();document.removeEventListener('click',h);}});},0);
-  }
-
-  function _fixedTierRow(tier) {
-    return `
-      <div class="db-tier-row" data-tier="${tier.key}">
-        <div class="db-tier-badge">
-          <span class="db-tier-dot" style="background:${tier.color}"></span>
-          <div class="db-tier-copy">
-            <div class="db-tier-name">${tier.label}</div>
-            <div class="db-tier-note">${tier.note}</div>
-          </div>
-        </div>
-        <div class="db-field db-field--compact">
-          <label class="db-label">Precio</label>
-          <input class="db-input" type="number" min="0" value="${tier.price}" />
-        </div>
-        <div class="db-field db-field--compact">
-          <label class="db-label">Capacidad</label>
-          <input class="db-input" type="number" min="1" value="${tier.capacity}" />
-        </div>
-      </div>`;
-  }
-
-  /* ══════════════════════════════════════════════════════════
-     ORGANIZADOR — CREAR EVENTO
-  ══════════════════════════════════════════════════════════ */
-  function _renderCreateFormLegacy() {
-    // Punto 3: verificar datos bancarios antes de permitir crear un evento
-    const role = Auth.session().role;
-    if ((role === 'organizer') && !Profile.hasCard()) {
-      return `
-        <div class="db-page-header"><div><h1>Crear Nuevo Evento</h1></div></div>
-        <div class="db-card" style="text-align:center; padding: 40px 20px;">
-          <div style="font-size:3rem; margin-bottom:16px;"><span class="material-symbols-outlined" style="font-size:48px; color:#ca8a04;">account_balance</span></div>
-          <div style="font-weight:700; font-size:1.1rem; color:#1e293b; margin-bottom:8px;">Se requiere cuenta bancaria</div>
-          <div style="font-size:0.88rem; color:#64748b; margin-bottom:20px; max-width:400px; margin-left:auto; margin-right:auto;">
-            Para poder crear y publicar eventos, primero debes registrar tu cuenta bancaria (CLABE) en tu perfil. Los pagos de boletaje se depositarán ahí.
-          </div>
-          <button class="db-btn db-btn-primary" onclick="Profile.open()">
-            <span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:6px">manage_accounts</span>
-            Registrar Cuenta Bancaria
-          </button>
-        </div>`;
+    try {
+      if (typeof DB !== 'undefined' && DB.saveEventRecord) {
+        await DB.saveEventRecord(event);
+      }
+    } catch (err) {
+      console.warn('[Dashboard] No se pudo sincronizar el evento con la BD:', err);
     }
-    return `
-      <div class="db-page-header"><div><h1>Crear Nuevo Evento</h1><p>Define información y niveles de boletos.</p></div></div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Información General</div></div>
-        <div class="db-card-body"><div class="db-grid2">
-          <div class="db-field"><label class="db-label">Nombre del Evento</label><input class="db-input" type="text" placeholder="Ej. Most Wanted Tour"/></div>
-          <div class="db-field"><label class="db-label">Artista / Grupo</label><input class="db-input" type="text" placeholder="Nombre del artista"/></div>
-          <div class="db-field"><label class="db-label">Nombre de Gira <span style="color:#9ca3af;font-weight:400">— opcional</span></label><input class="db-input" type="text" placeholder="Ej. Most Wanted Tour 2026"/></div>
-          <div class="db-field"><label class="db-label">Categoría</label><select class="db-select"><option value="">Selecciona...</option>${CATEGORIES.filter(c=>c!=='Todos').map(c=>`<option>${c}</option>`).join('')}</select></div>
-          <div class="db-field"><label class="db-label">Fecha</label><input class="db-input" type="date"/></div>
-          <div class="db-field"><label class="db-label">Hora</label><input class="db-input" type="time" value="20:00"/></div>
-          <div class="db-field"><label class="db-label">Ciudad</label><input class="db-input" type="text" placeholder="Ciudad"/></div>
-          <div class="db-field"><label class="db-label">Recinto</label><input class="db-input" type="text" placeholder="Ej. Foro Sol"/></div>
-        </div><label class="db-checkbox" style="margin-top:6px"><input type="checkbox"/><span>Solo para adultos (+18)</span></label>
-        </div></div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Imagen Promocional</div></div>
-        <div class="db-card-body">
-          <div class="db-upload" id="db-upload-area" onclick="document.getElementById('db-file-input').click()" ondragover="event.preventDefault(); this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="Zones.handleDrop(event, this)">
-            <input type="file" id="db-file-input" style="display:none" accept="image/*" onchange="Zones.handleFileSelect(this, document.getElementById('db-upload-area'))"/>
-            <div class="db-upload-icon">${Icons._icon('cloud_upload', 40)}</div>
-            <div class="db-upload-text">Arrastra o haz clic para subir imagen</div>
-            <div class="db-upload-hint">JPG, PNG, WEBP · Máx. 10 MB</div>
-          </div>
-        </div>
-      </div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title"><span style="display:inline-flex;margin-right:6px;vertical-align:text-bottom">${Icons.ticket}</span> Niveles de Boletos</div><span style="font-size:.73rem;color:#64748b">El tesorero aprueba los precios.</span></div>
-        <div class="db-card-body">
-          <div class="db-zone-rows" id="new-zone-rows">${_newZoneRowLegacy(0,{name:'General',price:500,color:COLORS[1],capacity:1000})}</div>
-          <button class="db-add-zone" onclick="Zones.addNewZone()">&#xff0b; Agregar nivel</button>
-        </div></div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Descripción</div></div>
-        <div class="db-card-body"><textarea class="db-textarea" rows="4" placeholder="Describe el evento..."></textarea></div></div>
-      <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:4px">
-        <button class="db-btn db-btn-secondary">Guardar borrador</button>
-        <button class="db-btn db-btn-primary" onclick="alert('Enviado al tesorero para revisión.')">Crear y enviar <span class="material-symbols-outlined" style="font-size: 14px; margin-left:6px; vertical-align: middle;">arrow_forward</span></button>
-      </div>`;
+    _toast('Cambios guardados', 'success');
+    _refreshPanels();
+    Grid.build?.();
   }
-  let _nzc=1;
-  function _newZoneRowLegacy(i,d){d=d||{};const color=d.color||COLORS[i%COLORS.length];return`<div class="db-zone-row" id="nzr-${i}"><div class="dz-dot" style="background:${color}" onclick="Zones.pickColorNewLegacy('${i}',this)"></div><input class="db-input" type="text" placeholder="Nombre" value="${d.name||''}"/><input class="db-input" type="number" placeholder="Precio" value="${d.price||''}" min="0"/><input class="db-input" type="number" placeholder="Capacidad" value="${d.capacity||''}" min="1"/><button class="db-del" onclick="document.getElementById('nzr-${i}').remove()"></button></div>`;}
-  function addNewZoneLegacy(){const l=document.getElementById('new-zone-rows');if(!l)return;const d=document.createElement('div');d.innerHTML=_newZoneRowLegacy(_nzc++);l.appendChild(d.firstElementChild);}
 
-  // Versión fija del formulario para organizadores: solo VIP, Oro y General.
-  function _renderCreateFormInline() {
-    const role = Auth.session().role;
-    if ((role === 'organizer') && !Profile.hasCard()) {
-      return `
-        <div class="db-page-header"><div><h1>Crear Nuevo Evento</h1></div></div>
-        <div class="db-card" style="text-align:center; padding: 40px 20px;">
-          <div style="font-size:3rem; margin-bottom:16px;"><span class="material-symbols-outlined" style="font-size:48px; color:#ca8a04;">account_balance</span></div>
-          <div style="font-weight:700; font-size:1.1rem; color:#1e293b; margin-bottom:8px;">Se requiere cuenta bancaria</div>
-          <div style="font-size:0.88rem; color:#64748b; margin-bottom:20px; max-width:400px; margin-left:auto; margin-right:auto;">
-            Para poder crear y publicar eventos, primero debes registrar tu cuenta bancaria (CLABE) en tu perfil. Los pagos de boletaje se depositarán ahí.
-          </div>
-          <button class="db-btn db-btn-primary" onclick="Profile.open()">
-            <span class="material-symbols-outlined" style="font-size:16px;vertical-align:middle;margin-right:6px">manage_accounts</span>
-            Registrar Cuenta Bancaria
-          </button>
-        </div>`;
+  function _previewImage(file, element) {
+    if (!file.type.startsWith('image/')) {
+      _toast('Sube una imagen valida', 'error');
+      return;
     }
-
-    return `
-      <div class="db-page-header"><div><h1>Crear Nuevo Evento</h1><p>Define información y niveles de boletos.</p></div></div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Información General</div></div>
-        <div class="db-card-body"><div class="db-grid2">
-          <div class="db-field"><label class="db-label">Nombre del Evento</label><input class="db-input" type="text" placeholder="Ej. Most Wanted Tour"/></div>
-          <div class="db-field"><label class="db-label">Artista / Grupo</label><input class="db-input" type="text" placeholder="Nombre del artista"/></div>
-          <div class="db-field"><label class="db-label">Nombre de Gira <span style="color:#9ca3af;font-weight:400">- opcional</span></label><input class="db-input" type="text" placeholder="Ej. Most Wanted Tour 2026"/></div>
-          <div class="db-field"><label class="db-label">Categoría</label><select class="db-select"><option value="">Selecciona...</option>${CATEGORIES.filter(c=>c!=='Todos').map(c=>`<option>${c}</option>`).join('')}</select></div>
-          <div class="db-field"><label class="db-label">Fecha</label><input class="db-input" type="date"/></div>
-          <div class="db-field"><label class="db-label">Hora</label><input class="db-input" type="time" value="20:00"/></div>
-          <div class="db-field"><label class="db-label">Ciudad</label><input class="db-input" type="text" placeholder="Ciudad"/></div>
-          <div class="db-field"><label class="db-label">Recinto</label><input class="db-input" type="text" placeholder="Ej. Foro Sol"/></div>
-        </div><label class="db-checkbox" style="margin-top:6px"><input type="checkbox"/><span>Solo para adultos (+18)</span></label>
-        </div></div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Imagen Promocional</div></div>
-        <div class="db-card-body">
-          <div class="db-upload" id="db-upload-area" onclick="document.getElementById('db-file-input').click()" ondragover="event.preventDefault(); this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="Zones.handleDrop(event, this)">
-            <input type="file" id="db-file-input" style="display:none" accept="image/*" onchange="Zones.handleFileSelect(this, document.getElementById('db-upload-area'))"/>
-            <div class="db-upload-icon">${Icons._icon('cloud_upload', 40)}</div>
-            <div class="db-upload-text">Arrastra o haz clic para subir imagen</div>
-            <div class="db-upload-hint">JPG, PNG, WEBP · Máx. 10 MB</div>
-          </div>
-        </div>
-      </div>
-      <div class="db-card"><div class="db-card-head db-create-ticket-head"><div class="db-card-title"><span style="display:inline-flex;margin-right:6px;vertical-align:text-bottom">${Icons.ticket}</span> Niveles de Boletos</div><span class="db-create-ticket-note">Solo se permiten VIP, Oro y General. El tesorero aprueba los precios.</span></div>
-        <div class="db-card-body">
-          <div class="db-tier-list" id="new-zone-rows">${FIXED_TICKET_TIERS.map(_fixedTierRow).join('')}</div>
-        </div></div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Descripción</div></div>
-        <div class="db-card-body"><textarea class="db-textarea" rows="4" placeholder="Describe el evento..."></textarea></div></div>
-      <div class="db-create-actions">
-        <button class="db-btn db-btn-secondary">Guardar borrador</button>
-        <button class="db-btn db-btn-primary" onclick="alert('Enviado al tesorero para revisión.')">Crear y enviar <span class="material-symbols-outlined" style="font-size: 14px; margin-left:6px; vertical-align: middle;">arrow_forward</span></button>
-      </div>`;
-  }
-
-  function handleDrop(e, el) {
-    e.preventDefault(); el.classList.remove('dragover');
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) _previewImage(e.dataTransfer.files[0], el);
-  }
-  function handleFileSelect(input, el) {
-    if (input.files && input.files[0]) _previewImage(input.files[0], el);
-  }
-  function _previewImage(file, el) {
-    if (!file.type.startsWith('image/')) { _toast('Sube una imagen válida', 'error'); return; }
     const reader = new FileReader();
-    reader.onload = e => {
-      el.innerHTML = `<img src="${e.target.result}" style="max-height:200px; border-radius:8px; object-fit:contain; border:1px solid #e2e8f0;"/>
-        <div style="margin-top:10px; font-size:0.85rem; color:#ef4444; font-weight:600; cursor:pointer;" onclick="event.stopPropagation(); this.parentElement.innerHTML = \`<input type='file' id='db-file-input' style='display:none' accept='image/*' onchange='Zones.handleFileSelect(this, document.getElementById(\\\"db-upload-area\\\"))'/><div class='db-upload-icon'>${Icons._icon('cloud_upload', 40)}</div><div class='db-upload-text'>Arrastra o haz clic para subir imagen</div><div class='db-upload-hint'>JPG, PNG, WEBP · Máx. 10 MB</div>\`">Eliminar imagen</div>`;
+    reader.onload = loadEvent => {
+      const src = loadEvent.target.result;
+      element.dataset.image = src;
+      element.innerHTML = `<img src="${src}" style="max-height:200px;border-radius:8px;object-fit:contain;border:1px solid #e2e8f0;"/><div style="margin-top:10px;font-size:0.85rem;color:#ef4444;font-weight:600;cursor:pointer;" onclick="event.stopPropagation(); Zones.resetUploadArea()">Eliminar imagen</div>`;
     };
     reader.readAsDataURL(file);
   }
 
-  /* ══════════════════════════════════════════════════════════
-     TESORERO — REVISAR PRECIOS
-  ══════════════════════════════════════════════════════════ */
-  function _renderReview() {
-    const pending=getPending();
-    return `
-      <div class="db-page-header"><div><h1>Revisión de Precios</h1><p>Ajusta y aprueba los precios propuestos.</p></div>${pending.length?`<span style="background:#fefce8;color:#ca8a04;font-size:.72rem;font-weight:700;padding:4px 12px;border-radius:999px;border:1px solid #fde68a">${pending.length} pendiente${pending.length>1?'s':''}</span>`:''}</div>
-      ${!pending.length?`<div class="db-empty"><div class="db-empty-icon"></div><div class="db-empty-text">No hay precios pendientes.</div></div>`:pending.map(ev=>{
-        const zones=_state[ev.id]?.zones||[];
-        return`<div class="db-review-card" id="rev-${ev.id}">
-          <div class="db-review-head">
-            <div class="db-review-thumb"><img src="${ev.image}" alt="${ev.title}" loading="lazy"/></div>
-            <div><div class="db-review-title">${ev.title}</div><div class="db-review-meta">${ev.city} · ${_fmt(ev.date)}</div><div class="db-review-org">Organizado por: ${ev.organizerId||'eber.higuera@gmail.com'}</div></div>
-          </div>
-          <div class="db-review-zones"><div class="db-review-zones-label">Precios propuestos — puedes ajustarlos antes de aprobar</div>
-            ${zones.map((z,i)=>`<div class="db-review-zone-row">
-              <div class="db-review-zone-left"><div class="db-dot-sm" style="background:${z.color}"></div><span class="db-review-zone-name">${z.name}</span><span class="db-review-zone-cap">(${z.capacity.toLocaleString()})</span></div>
-              <div class="db-review-price-wrap"><span class="db-review-price">$${z.price.toLocaleString()}</span><div><div class="db-override-label">Ajustar:</div><input class="db-override-input" type="number" min="0" placeholder="${z.price}" oninput="Zones.overridePrice('${ev.id}',${i},+this.value)"/></div></div>
-            </div>`).join('')}
-          </div>
-          <div class="db-reject-note-row"><label class="db-reject-note-label">Nota de rechazo (opcional)</label><input class="db-reject-note-input" id="rnote-${ev.id}" type="text" placeholder="Motivo..."/></div>
-          <div class="db-review-actions"><button class="db-btn db-btn-danger" onclick="Zones.rejectEvent('${ev.id}')">Rechazar</button><button class="db-btn db-btn-success" onclick="Zones.approveEvent('${ev.id}')">Aprobar zonas</button></div>
-        </div>`;}).join('')}`;
-  }
-  function overridePrice(eventId,idx,val){if(_state[eventId]?.zones[idx]&&val>0)_state[eventId].zones[idx].price=val;}
-  function approveEvent(eventId){if(!_state[eventId])return;_state[eventId].status='approved';_state[eventId].note='';document.getElementById(`rev-${eventId}`)?.remove();_toast('Precios aprobados','success');}
-  function rejectEvent(eventId){const note=document.getElementById(`rnote-${eventId}`)?.value.trim()||'Sin motivo';if(!_state[eventId])return;_state[eventId].status='rejected';_state[eventId].note=note;document.getElementById(`rev-${eventId}`)?.remove();_toast('Rechazado','error');}
-
-  /* ══════════════════════════════════════════════════════════
-     TESORERO — VENTAS (columnas dinámicas)
-  ══════════════════════════════════════════════════════════ */
-  function _renderSales() {
-    const data=EVENTS.filter(ev=>ev.status!=='expired'&&getZones(ev.id).length>0).map(ev=>{
-      const zones=getZones(ev.id);
-      const sold=zones.map(z=>({...z,sold:Math.floor(z.capacity*(0.35+Math.random()*0.45))}));
-      const rev=sold.reduce((a,z)=>a+z.sold*z.price,0);
-      const tot=sold.reduce((a,z)=>a+z.sold,0);
-      return{ev,sold,rev,tot};
-    });
-    if(!data.length)return`<div class="db-page-header"><div><h1>Ventas por Evento</h1></div></div><div class="db-empty"><div class="db-empty-icon"></div><div class="db-empty-text">Sin datos aún.</div></div>`;
-    const tRev=data.reduce((a,e)=>a+e.rev,0),tSold=data.reduce((a,e)=>a+e.tot,0),maxRev=Math.max(...data.map(e=>e.rev));
-    return`
-      <div class="db-page-header"><div><h1>Ventas por Evento</h1><p>Columnas según niveles reales de cada evento.</p></div></div>
-      <div class="db-stats">
-        <div class="db-stat blue"><div class="db-stat-icon">${Icons._icon('payments', 24)}</div><div><div class="db-stat-label">Ingresos</div><div class="db-stat-value">$${(tRev/1000).toFixed(0)}k</div></div></div>
-        <div class="db-stat pink"><div class="db-stat-icon">${Icons.ticket}</div><div><div class="db-stat-label">Boletos</div><div class="db-stat-value">${tSold.toLocaleString()}</div></div></div>
-        <div class="db-stat purple"><div class="db-stat-icon">${Icons._icon('event', 24)}</div><div><div class="db-stat-label">Eventos</div><div class="db-stat-value">${data.length}</div></div></div>
-      </div>
-      <div class="db-card" style="margin-bottom:20px"><div class="db-card-head"><div class="db-card-title">Ingresos por Evento</div></div><div class="db-card-body"><div class="sc-chart">
-        ${data.map(e=>{const pct=maxRev>0?Math.round((e.rev/maxRev)*100):0;return`<div class="sc-row"><div><div class="sc-name">${e.ev.title}</div><div class="sc-org">‍${e.ev.organizerId||'eber.higuera@gmail.com'}</div></div><div class="sc-bar-wrap"><div class="sc-bar" style="width:${Math.max(pct,8)}%"><span class="sc-bar-label">$${(e.rev/1000).toFixed(0)}k</span></div></div><div class="sc-count">${e.tot.toLocaleString()}</div></div>`;}).join('')}
-      </div></div></div>
-      ${data.map(e=>{
-        const cap=e.sold.reduce((a,z)=>a+z.capacity,0),fill=cap>0?Math.round((e.tot/cap)*100):0;
-        return`<div class="db-card" style="margin-bottom:14px">
-          <div class="db-card-head" style="flex-wrap:wrap;gap:8px"><div><div class="db-card-title">${e.ev.title}</div><div style="font-size:.7rem;color:#64748b;margin-top:1px">‍${e.ev.organizerId||'eber.higuera@gmail.com'}</div></div><div style="font-size:.74rem;display:flex;gap:10px"><span style="color:#64748b">${e.tot.toLocaleString()} boletos · ${fill}% ocup.</span><span style="color:#8A2BE2;font-weight:700">$${(e.rev/1000).toFixed(0)}k</span></div></div>
-          <div class="db-table-wrap"><table class="db-table">
-            <thead><tr>${e.sold.map(z=>`<th><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${z.color};margin-right:4px"></span>${z.name}</th>`).join('')}<th>Total</th><th>Ingresos</th></tr></thead>
-            <tbody><tr>${e.sold.map(z=>`<td><div style="font-weight:600;font-size:.79rem">${z.sold.toLocaleString()}</div><div style="font-size:.65rem;color:#94a3b8">de ${z.capacity.toLocaleString()}</div><div style="font-size:.65rem;color:#8A2BE2">$${(z.sold*z.price/1000).toFixed(0)}k</div></td>`).join('')}<td style="font-weight:700">${e.tot.toLocaleString()}</td><td style="font-weight:700;color:#8A2BE2">$${(e.rev/1000).toFixed(0)}k</td></tr></tbody>
-          </table></div></div>`;
-      }).join('')}`;
+  function resetUploadArea() {
+    const element = document.getElementById('db-upload-area');
+    if (!element) return;
+    delete element.dataset.image;
+    element.innerHTML = `<input type="file" id="db-file-input" style="display:none" accept="image/*" onchange="Zones.handleFileSelect(this, document.getElementById('db-upload-area'))"/><div class="db-upload-icon">${Icons._icon('cloud_upload', 40)}</div><div class="db-upload-text">Arrastra o haz clic para subir imagen</div><div class="db-upload-hint">JPG, PNG, WEBP · Max. 10 MB</div>`;
   }
 
-  /* ══════════════════════════════════════════════════════════
-     TESORERO — PAGOS
-  ══════════════════════════════════════════════════════════ */
-  function _renderPayoutsLegacy() {
-    const orgs=[
-      {email:'eber.higuera@gmail.com',name:'Eber Higuera',events:['Bad Bunny CDMX','Synthwave','Neon Nights'],gross:5334000,paid:false, bank: 'BBVA — CLABE: 012 180 01534007821 9'},
-      {email:'other.organizer@gmail.com',name:'Compañía Teatral Elite',events:['El Fantasma de la Ópera'],gross:1130000,paid:true, bank: 'Santander — CLABE: 014 180 00000000930 2'}
-    ];
-    return`<div class="db-page-header"><div><h1>Pagos a Organizadores</h1><p>Consulta la información bancaria y distribuye ingresos.</p></div></div>
-      ${orgs.map(org=>{const fee=Math.round(org.gross*.05),payout=org.gross-fee;return`<div class="db-card" style="margin-bottom:14px">
-        <div class="db-card-head" style="gap:12px; align-items:flex-start;">
-          <div style="display:flex; gap:12px; align-items:flex-start;">
-            <div class="db-avatar" style="width:40px;height:40px;background:#f1f5f9;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#64748b;flex-shrink:0;">
-              ${Icons._icon('person',24)}
-            </div>
-            <div>
-              <div class="db-card-title">${org.name}</div>
-              <div style="font-size:.75rem;color:#64748b;margin-top:2px;">${org.email}</div>
-              <div style="font-size:.75rem;color:#1e293b;margin-top:4px;font-weight:600;"><span class="material-symbols-outlined" style="font-size:14px;vertical-align:middle;color:#8B5CF6;margin-right:4px;">account_balance</span>${org.bank}</div>
-            </div>
-          </div>
-        </div>
-        <div class="db-card-body">
-          <div class="db-stats" style="margin-bottom:14px; grid-template-columns: repeat(3, 1fr);">
-            <div class="db-stat blue"><div class="db-stat-icon" style="font-size:.85rem">${Icons._icon('account_balance', 22)}</div><div><div class="db-stat-label">Ingresos Brutos</div><div class="db-stat-value" style="font-size:1.1rem">$${org.gross.toLocaleString()}</div></div></div>
-            <div class="db-stat pink"><div class="db-stat-icon" style="font-size:.85rem">%</div><div><div class="db-stat-label">Comisión 5%</div><div class="db-stat-value" style="font-size:1.1rem;color:#dc2626">−$${fee.toLocaleString()}</div></div></div>
-            <div class="db-stat green"><div class="db-stat-icon" style="font-size:.85rem">${Icons._icon('wallet', 22)}</div><div><div class="db-stat-label">A Transferir</div><div class="db-stat-value" style="font-size:1.1rem;color:#16a34a">$${payout.toLocaleString()}</div></div></div>
-          </div>
-          <div style="font-size:0.75rem; color:#64748b; margin-bottom:6px;">Eventos generadores de saldo:</div>
-          <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:4px">${org.events.map(e=>`<span style="font-size:.72rem;padding:3px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:999px;color:#374151;display:inline-flex;align-items:center;gap:4px"><span>${Icons.ticket}</span> ${e}</span>`).join('')}</div>
-        </div></div>`;}).join('')}`;
+  function handleDrop(event, element) {
+    event.preventDefault();
+    element.classList.remove('dragover');
+    if (event.dataTransfer.files?.[0]) _previewImage(event.dataTransfer.files[0], element);
   }
 
-  /* ══════════════════════════════════════════════════════════
-     TESORERO — REEMBOLSOS
-  ══════════════════════════════════════════════════════════ */
+  function handleFileSelect(input, element) {
+    if (input.files?.[0]) _previewImage(input.files[0], element);
+  }
+
+  function resetCreateForm() {
+    _activatePanel('new');
+  }
+
+  async function createEvent() {
+    const title = document.getElementById('db-new-title')?.value.trim();
+    const artist = document.getElementById('db-new-artist')?.value.trim();
+    const tourName = document.getElementById('db-new-tour')?.value.trim();
+    const category = document.getElementById('db-new-category')?.value;
+    const date = document.getElementById('db-new-date')?.value;
+    const time = document.getElementById('db-new-time')?.value || '20:00';
+    const city = document.getElementById('db-new-city')?.value.trim();
+    const venue = document.getElementById('db-new-venue')?.value.trim();
+    const price = Number(document.getElementById('db-new-price')?.value || 0);
+    const capacity = Number(document.getElementById('db-new-capacity')?.value || 0);
+    const about = document.getElementById('db-new-about')?.value.trim();
+    const image = document.getElementById('db-upload-area')?.dataset.image || 'assets/img/logo.png';
+    const button = document.getElementById('db-create-submit');
+
+    if (!title || !artist || !category || !date || !city || !venue || price <= 0 || capacity <= 0) {
+      alert('Completa todos los campos obligatorios del evento.');
+      return;
+    }
+
+    const artistId = _ensureArtistRecord(artist, category);
+    const localId = `evt-${_slug(title)}-${Date.now().toString(36)}`;
+    const event = {
+      id: localId,
+      artistId,
+      organizerId: Auth.session().email,
+      title,
+      artist,
+      date,
+      time,
+      city,
+      venue,
+      image,
+      category,
+      recommended: false,
+      bestSeller: false,
+      ticketPrice: price,
+      ticketCapacity: capacity,
+      status: 'active',
+      tourName: tourName || null,
+      about: about || 'Evento creado desde el panel de Ticketazo.',
+      reviews: [],
+      __custom: true,
+    };
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Publicando...';
+    }
+
+    try {
+      if (typeof DB !== 'undefined' && DB.saveEventRecord) {
+        await DB.saveEventRecord(event);
+      }
+
+      EVENTS.unshift(event);
+      _state[event.id] = { price, capacity };
+      _liveSales[event.id] = { sold: 0, revenue: 0 };
+      _ensureCityRecord(city);
+      _persistState();
+      _persistCustomEvents();
+
+      _toast('Evento publicado correctamente', 'success');
+      Grid.build?.();
+      _refreshPanels('events');
+    } catch (err) {
+      console.error('[Dashboard] Error creando evento:', err);
+      _toast('No se pudo crear el evento en la base de datos', 'error');
+      if (button) {
+        button.disabled = false;
+        button.textContent = 'Publicar evento';
+      }
+    }
+  }
+
+  function promoteToCarousel(id) {
+    const event = _event(id);
+    if (!event) return;
+    if (HERO_SLIDES.some(slide => slide.eventId === id)) {
+      _toast('Este evento ya esta en el carrusel del inicio', 'success');
+      return;
+    }
+    HERO_SLIDES.push({ title: event.title, sub: `${event.artist} - ${event.city}`, cta: `Ver ${event.title}`, eventId: event.id, image: event.image });
+    _persistHeroSlides();
+    Carousel.refresh?.();
+    _toast(`"${event.title}" ahora aparece en el carrusel`, 'success');
+    if (document.getElementById('panel-promote')?.classList.contains('active')) _activatePanel('promote');
+  }
+
   function copyBankNumber(value) {
-    const text = (value || '').trim();
+    const text = String(value || '').trim();
     if (!text) return;
-
-    const fallbackCopy = () => {
+    const fallback = () => {
       const area = document.createElement('textarea');
       area.value = text;
       area.setAttribute('readonly', '');
       area.style.position = 'fixed';
       area.style.opacity = '0';
-      area.style.pointerEvents = 'none';
       document.body.appendChild(area);
       area.select();
-
       try {
         document.execCommand('copy');
         _toast('CLABE copiada', 'success');
@@ -691,364 +783,44 @@ window.Zones = (() => {
         area.remove();
       }
     };
-
     if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text)
-        .then(() => _toast('CLABE copiada', 'success'))
-        .catch(() => fallbackCopy());
+      navigator.clipboard.writeText(text).then(() => _toast('CLABE copiada', 'success')).catch(() => fallback());
       return;
     }
-
-    fallbackCopy();
+    fallback();
   }
 
-  function _renderPayoutsInline() {
-    const orgs = [
-      {
-        email: 'eber.higuera@gmail.com',
-        name: 'Eber Higuera',
-        events: ['Bad Bunny CDMX', 'Synthwave', 'Neon Nights'],
-        gross: 5334000,
-        paid: false,
-        bankName: 'BBVA',
-        clabe: '012 180 01534007821 9'
-      },
-      {
-        email: 'other.organizer@gmail.com',
-        name: 'Compañía Teatral Elite',
-        events: ['El Fantasma de la Ópera'],
-        gross: 1130000,
-        paid: true,
-        bankName: 'Santander',
-        clabe: '014 180 00000000930 2'
-      }
-    ];
-
-    return `<div class="db-page-header">
-        <div>
-          <h1>Pagos a Organizadores</h1>
-          <p>Consulta la información bancaria y distribuye ingresos.</p>
-        </div>
-      </div>
-      ${orgs.map(org => {
-        const fee = Math.round(org.gross * 0.05);
-        const payout = org.gross - fee;
-        return `<div class="db-card db-payout-card">
-          <div class="db-card-head db-payout-head">
-            <div class="db-payout-profile">
-              <div class="db-payout-avatar">${Icons._icon('person', 24)}</div>
-              <div class="db-payout-meta">
-                <div class="db-card-title">${org.name}</div>
-                <div class="db-payout-email">${org.email}</div>
-              </div>
-            </div>
-          </div>
-          <div class="db-card-body">
-            <div class="db-payout-bank">
-              <div class="db-payout-bank-copy">
-                <div class="db-payout-bank-label">Cuenta bancaria registrada</div>
-                <div class="db-payout-bank-name">
-                  <span class="material-symbols-outlined" style="font-size:14px;color:#8B5CF6">account_balance</span>
-                  ${org.bankName}
-                </div>
-                <div class="db-payout-clabe">${org.clabe}</div>
-              </div>
-              <button class="db-btn db-btn-secondary db-payout-copy" onclick="Zones.copyBankNumber('${org.clabe}')">
-                <span class="material-symbols-outlined" style="font-size:16px">content_copy</span>
-                Copiar CLABE
-              </button>
-            </div>
-
-            <div class="db-payout-stats">
-              <div class="db-stat blue">
-                <div class="db-stat-icon">${Icons._icon('account_balance', 22)}</div>
-                <div>
-                  <div class="db-stat-label">Ingresos Brutos</div>
-                  <div class="db-stat-value">$${org.gross.toLocaleString()}</div>
-                </div>
-              </div>
-              <div class="db-stat pink">
-                <div class="db-stat-icon">%</div>
-                <div>
-                  <div class="db-stat-label">Comisión 5%</div>
-                  <div class="db-stat-value db-payout-minus">-$${fee.toLocaleString()}</div>
-                </div>
-              </div>
-              <div class="db-stat green">
-                <div class="db-stat-icon">${Icons._icon('wallet', 22)}</div>
-                <div>
-                  <div class="db-stat-label">A Transferir</div>
-                  <div class="db-stat-value db-payout-plus">$${payout.toLocaleString()}</div>
-                </div>
-              </div>
-            </div>
-
-            <div class="db-payout-events-label">Eventos generadores de saldo:</div>
-            <div class="db-payout-events">
-              ${org.events.map(e => `<span class="db-payout-event"><span>${Icons.ticket}</span>${e}</span>`).join('')}
-            </div>
-          </div>
-        </div>`;
-      }).join('')}`;
-  }
-
-  function _renderRefundsLegacy() {
-    const list=[{id:'R-1001',user:'juan.perez@gmail.com',event:'Bad Bunny CDMX',amount:1500,status:'pending'},{id:'R-1002',user:'maria.gomez@outlook.com',event:'Synthwave',amount:2000,status:'approved'},{id:'R-1003',user:'luis.rdz@hotmail.com',event:'Neon Nights',amount:800,status:'pending'}];
-    return`<div class="db-page-header"><div><h1>Reembolsos</h1></div><button class="db-btn db-btn-primary" style="font-size:.78rem" onclick="alert('Pagos distribuidos')">Distribuir Pagos</button></div>
-      <div class="db-card"><div class="db-table-wrap"><table class="db-table"><thead><tr><th>ID</th><th>Usuario</th><th>Evento</th><th>Monto</th><th>Estado</th><th>Acción</th></tr></thead><tbody>
-        ${list.map(r=>`<tr><td><code style="font-size:.75rem;color:#8A2BE2">${r.id}</code></td><td style="font-size:.78rem">${r.user}</td><td style="font-size:.78rem">${r.event}</td><td style="font-weight:700">$${r.amount.toLocaleString()}</td><td><span class="db-badge ${r.status==='approved'?'approved':'pending'}">${r.status==='approved'?'Aprobado':'⏳ Pendiente'}</span></td><td>${r.status==='pending'?`<button class="db-btn db-btn-success" style="font-size:.71rem;padding:5px 10px" onclick="alert('${r.id} aprobado')">Aprobar</button>`:'—'}</td></tr>`).join('')}
-      </tbody></table></div></div>`;
-  }
-
-  /* ══════════════════════════════════════════════════════════
-     ADMIN — RESUMEN
-  ══════════════════════════════════════════════════════════ */
-  function _syncRefundBadge() {
-    const btn = document.getElementById('tab-refunds');
-    if (!btn) return;
-
-    const pendingCount = _getRefundRequests().filter(refund => refund.status === 'pending').length;
-    let badge = btn.querySelector('.db-nav-badge');
-
-    if (pendingCount > 0) {
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.className = 'db-nav-badge';
-        btn.appendChild(badge);
-      }
-      badge.textContent = pendingCount;
-      return;
-    }
-
-    badge?.remove();
-  }
-
-  function approveRefundRequest(refundId) {
-    if (typeof Profile === 'undefined' || !Profile.resolveRefund) return;
-    Profile.resolveRefund(refundId, 'approved');
-
-    const panel = document.getElementById('panel-refunds');
-    if (panel) panel.innerHTML = _renderRefunds();
-    _syncRefundBadge();
-    _toast('Reembolso aprobado', 'success');
-  }
-
-  function rejectRefundRequest(refundId) {
-    if (typeof Profile === 'undefined' || !Profile.resolveRefund) return;
-    Profile.resolveRefund(refundId, 'rejected');
-
-    const panel = document.getElementById('panel-refunds');
-    if (panel) panel.innerHTML = _renderRefunds();
-    _syncRefundBadge();
-    _toast('Solicitud rechazada', 'error');
-  }
-
-  function _renderRefundsInline() {
-    const list = _getRefundRequests();
-    const pending = list.filter(refund => refund.status === 'pending').length;
-    const approved = list.filter(refund => refund.status === 'approved').length;
-    const rejected = list.filter(refund => refund.status === 'rejected').length;
-
-    if (!list.length) {
-      return `<div class="db-page-header"><div><h1>Reembolsos</h1><p>Aquí aparecerán las solicitudes que envíen los clientes.</p></div></div>
-        <div class="db-empty"><div class="db-empty-icon"></div><div class="db-empty-text">Aún no hay solicitudes de reembolso.</div></div>`;
-    }
-
-    return `<div class="db-page-header">
-        <div>
-          <h1>Reembolsos</h1>
-          <p>Solicitudes enviadas por clientes para revisión del tesorero.</p>
-        </div>
-        <span class="db-badge pending">${pending} pendiente${pending === 1 ? '' : 's'}</span>
-      </div>
-      <div class="db-stats">
-        <div class="db-stat pink"><div class="db-stat-icon">${Icons._icon('reply', 22)}</div><div><div class="db-stat-label">Pendientes</div><div class="db-stat-value">${pending}</div></div></div>
-        <div class="db-stat green"><div class="db-stat-icon">${Icons._icon('check_circle', 22)}</div><div><div class="db-stat-label">Aprobados</div><div class="db-stat-value">${approved}</div></div></div>
-        <div class="db-stat purple"><div class="db-stat-icon">${Icons._icon('cancel', 22)}</div><div><div class="db-stat-label">Rechazados</div><div class="db-stat-value">${rejected}</div></div></div>
-      </div>
-      <div class="db-card">
-        <div class="db-table-wrap">
-          <table class="db-table">
-            <thead>
-              <tr>
-                <th>Solicitud</th>
-                <th>Cliente</th>
-                <th>Evento</th>
-                <th>Monto</th>
-                <th>Motivo</th>
-                <th>Estado</th>
-                <th>Acción</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${list.map(refund => `
-                <tr>
-                  <td>
-                    <code style="font-size:.75rem;color:#8A2BE2">${refund.id}</code>
-                    <div style="font-size:.7rem;color:#94a3b8;margin-top:4px">${new Date(refund.requestedAt).toLocaleDateString('es-ES')}</div>
-                  </td>
-                  <td>
-                    <div style="font-weight:700;color:#0f172a;font-size:.8rem">${refund.userName}</div>
-                    <div style="font-size:.72rem;color:#64748b;margin-top:3px">${refund.userEmail}</div>
-                  </td>
-                  <td>
-                    <div style="font-weight:700;color:#0f172a;font-size:.8rem">${refund.eventTitle}</div>
-                    <div style="font-size:.72rem;color:#64748b;margin-top:3px">Zona: ${String(refund.zone || '').toUpperCase()}</div>
-                  </td>
-                  <td style="font-weight:700">$${Number(refund.amount || 0).toLocaleString()}</td>
-                  <td style="min-width:220px">
-                    <div style="font-size:.78rem;line-height:1.45;color:#334155">${refund.reason}</div>
-                  </td>
-                  <td><span class="db-badge ${refund.status === 'approved' ? 'approved' : refund.status === 'rejected' ? 'rejected' : 'pending'}">${refund.status === 'approved' ? 'Aprobado' : refund.status === 'rejected' ? 'Rechazado' : 'Pendiente'}</span></td>
-                  <td>
-                    ${refund.status === 'pending'
-                      ? `<div style="display:flex;gap:8px;flex-wrap:wrap">
-                           <button class="db-btn db-btn-success" style="font-size:.72rem;padding:6px 10px" onclick="Zones.approveRefundRequest('${refund.id}')">Aprobar</button>
-                           <button class="db-btn db-btn-danger" style="font-size:.72rem;padding:6px 10px" onclick="Zones.rejectRefundRequest('${refund.id}')">Rechazar</button>
-                         </div>`
-                      : '—'}
-                  </td>
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
-  }
-
-  function _renderOverviewInline() {
-    const p=getPending();
-    return`<div class="db-page-header"><div><h1>Centro de Control</h1><p>Supervisión global.</p></div><div style="background:rgba(138,43,226,.08);color:#8A2BE2;padding:6px 14px;border-radius:9px;font-size:.78rem;font-weight:700;border:1px solid rgba(138,43,226,.15)">Operativa</div></div>
-      <div class="db-stats">
-        <div class="db-stat blue"><div class="db-stat-icon">${Icons._icon('group', 24)}</div><div><div class="db-stat-label">Usuarios</div><div class="db-stat-value">45,231</div></div></div>
-        <div class="db-stat pink"><div class="db-stat-icon">${Icons._icon('notifications', 24)}</div><div><div class="db-stat-label">Alertas</div><div class="db-stat-value">2</div></div></div>
-        <div class="db-stat purple"><div class="db-stat-icon">${Icons._icon('pending_actions', 24)}</div><div><div class="db-stat-label">Eventos Pendientes</div><div class="db-stat-value">${p.length}</div></div></div>
-      </div>
-      <div class="db-card"><div class="db-card-head"><div class="db-card-title">Solicitudes Pendientes</div></div><div class="db-card-body">
-        ${p.length?p.map(ev=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;margin-bottom:7px;flex-wrap:wrap;gap:7px"><div style="display:flex;align-items:center;gap:9px"><img src="${ev.image}" style="width:36px;height:36px;border-radius:7px;object-fit:cover"/><div><div style="font-size:.82rem;font-weight:600;color:#0f172a">${ev.title}</div><div style="font-size:.7rem;color:#64748b">${ev.organizerId||'eber.higuera@gmail.com'}</div></div></div><button class="db-btn db-btn-primary" style="font-size:.73rem;padding:6px 12px" onclick="Zones.switchTab('review',document.getElementById('tab-review'))">Revisar →</button></div>`).join(''):`<div class="db-empty"><div class="db-empty-icon"></div><div class="db-empty-text">Sin solicitudes</div></div>`}
-      </div></div>`;
-  }
-
-  /* ── Utilidades ── */
-  function _renderCreateForm() {
-    const render = window.DashboardViews?.renderCreateForm;
-    if (!render) return _renderCreateFormInline();
-
-    return render({
-      role: Auth.session().role,
-      hasCard: Profile.hasCard(),
-      categories: CATEGORIES.filter(category => category !== 'Todos'),
-      uploadIcon: Icons._icon('cloud_upload', 40),
-      ticketIcon: Icons.ticket,
-      fixedTicketTiers: FIXED_TICKET_TIERS,
-    });
-  }
-
-  function _renderPayouts() {
-    const render = window.DashboardViews?.renderPayouts;
-    if (!render) return _renderPayoutsInline();
-
-    const rows = [
-      {
-        email: 'eber.higuera@gmail.com',
-        name: 'Eber Higuera',
-        events: ['Bad Bunny CDMX', 'Synthwave', 'Neon Nights'],
-        gross: 5334000,
-        bankName: 'BBVA',
-        clabe: '012 180 01534007821 9',
-      },
-      {
-        email: 'other.organizer@gmail.com',
-        name: 'Compañía Teatral Elite',
-        events: ['El Fantasma de la Ópera'],
-        gross: 1130000,
-        bankName: 'Santander',
-        clabe: '014 180 00000000930 2',
-      },
-    ].map(org => {
-      const fee = Math.round(org.gross * 0.05);
-      const payout = org.gross - fee;
-      return {
-        ...org,
-        grossLabel: `$${org.gross.toLocaleString()}`,
-        feeLabel: `-$${fee.toLocaleString()}`,
-        payoutLabel: `$${payout.toLocaleString()}`,
-      };
-    });
-
-    return render({
-      rows,
-      personIcon: Icons._icon('person', 24),
-      bankIcon: Icons._icon('account_balance', 22),
-      walletIcon: Icons._icon('wallet', 22),
-      ticketIcon: Icons.ticket,
-    });
-  }
-
-  function _renderRefunds() {
-    const render = window.DashboardViews?.renderRefunds;
-    if (!render) return _renderRefundsInline();
-
-    const rows = _getRefundRequests().map(refund => ({
-      ...refund,
-      dateLabel: new Date(refund.requestedAt).toLocaleDateString('es-ES'),
-      zoneLabel: String(refund.zone || '').toUpperCase(),
-      amountLabel: `$${Number(refund.amount || 0).toLocaleString()}`,
-      statusClass: refund.status === 'approved' ? 'approved' : refund.status === 'rejected' ? 'rejected' : 'pending',
-      statusLabel: refund.status === 'approved' ? 'Aprobado' : refund.status === 'rejected' ? 'Rechazado' : 'Pendiente',
-      actionHtml: refund.status === 'pending'
-        ? `<div style="display:flex;gap:8px;flex-wrap:wrap">
-             <button class="db-btn db-btn-success" style="font-size:.72rem;padding:6px 10px" onclick="Zones.approveRefundRequest('${refund.id}')">Aprobar</button>
-             <button class="db-btn db-btn-danger" style="font-size:.72rem;padding:6px 10px" onclick="Zones.rejectRefundRequest('${refund.id}')">Rechazar</button>
-           </div>`
-        : '—',
-    }));
-
-    const summary = {
-      pending: rows.filter(refund => refund.status === 'pending').length,
-      approved: rows.filter(refund => refund.status === 'approved').length,
-      rejected: rows.filter(refund => refund.status === 'rejected').length,
-    };
-
-    return render({
-      rows,
-      summary,
-      replyIcon: Icons._icon('reply', 22),
-      approvedIcon: Icons._icon('check_circle', 22),
-      rejectedIcon: Icons._icon('cancel', 22),
-    });
-  }
-
-  function _renderOverview() {
-    const render = window.DashboardViews?.renderOverview;
-    if (!render) return _renderOverviewInline();
-
-    return render({
-      pendingEvents: getPending(),
-      groupIcon: Icons._icon('group', 24),
-      notificationIcon: Icons._icon('notifications', 24),
-      pendingActionsIcon: Icons._icon('pending_actions', 24),
-    });
-  }
-
-  function _fmt(d){return new Date(d).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'});}
-  function _toast(msg,type){
-    let t=document.getElementById('_tz');
-    if(!t){t=document.createElement('div');t.id='_tz';t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(40px);padding:8px 20px;border-radius:999px;font-size:.8rem;font-weight:600;z-index:9999;transition:all .25s;opacity:0;white-space:nowrap;pointer-events:none';document.body.appendChild(t);}
-    t.textContent=msg;t.style.background=type==='success'?'rgba(134,239,172,.15)':'rgba(248,113,113,.15)';t.style.border=`1px solid ${type==='success'?'rgba(134,239,172,.3)':'rgba(248,113,113,.3)'}`;t.style.color=type==='success'?'#86efac':'#f87171';
-    requestAnimationFrame(()=>{t.style.opacity='1';t.style.transform='translateX(-50%) translateY(0)';});
-    setTimeout(()=>{t.style.opacity='0';t.style.transform='translateX(-50%) translateY(40px)';},3000);
+  function _refreshPanels(preferredKey) {
+    const current = preferredKey || document.querySelector('.db-nav-btn.active')?.id?.replace('tab-', '') || _tabs(Auth.session().role)[0]?.key;
+    const tabs = _buildNav();
+    const resolved = current || tabs[0]?.key;
+    const button = resolved ? document.getElementById(`tab-${resolved}`) : null;
+    if (button) button.classList.add('active');
+    _activatePanel(resolved);
   }
 
   return {
-    init, openDashboard,
-    getZones, getStatus, getMinPrice, getPending,
-    openSidebar, closeSidebar, switchTab,
-    toggleExpand, addZone, deleteZone, setField, submitZones,
-    pickColor,
-    pickColorNew: pickColorNewLegacy,
-    addNewZone: addNewZoneLegacy,
-    overridePrice, approveEvent, rejectEvent,
-    handleDrop, handleFileSelect, promoteToCarousel, copyBankNumber,
-    approveRefundRequest, rejectRefundRequest
+    init,
+    openDashboard,
+    getTicketConfig,
+    getStatus,
+    getMinPrice,
+    getPending,
+    getSoldCount,
+    getRevenue,
+    getRemainingCapacity,
+    refreshSales: _loadRealSales,
+    openSidebar,
+    closeSidebar,
+    switchTab,
+    setTicketField,
+    saveTicketConfig,
+    handleDrop,
+    handleFileSelect,
+    resetUploadArea,
+    resetCreateForm,
+    createEvent,
+    promoteToCarousel,
+    copyBankNumber,
   };
 })();

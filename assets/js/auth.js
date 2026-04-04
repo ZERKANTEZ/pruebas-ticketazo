@@ -4,7 +4,7 @@
  */
 const Auth = (() => {
   // ── Estado interno ────────────────────────────────────────────────────────
-  let _session = { id: '', name: '', role: '', email: '' };
+  let _session = { id: '', name: '', role: '', email: '', dbUserId: null, adminId: null };
   let _sbReady  = false;
   let _sb       = null;
   let _applying = false;
@@ -31,6 +31,19 @@ const Auth = (() => {
     if (eml.includes('organizador')) return 'organizer';
     if (eml.includes('admin') || eml.includes('eber')) return 'admin';
     return 'user';
+  }
+
+  async function _syncDbIdentity(email, name) {
+    if (typeof DB === 'undefined' || !DB.syncIdentity) {
+      return { userId: null, adminId: null, adminRole: '' };
+    }
+
+    try {
+      return await DB.syncIdentity({ email, name });
+    } catch (err) {
+      console.warn('[Auth] No se pudo sincronizar la identidad con la BD:', err);
+      return { userId: null, adminId: null, adminRole: '' };
+    }
   }
 
   // ── Modal & Vistas ────────────────────────────────────────────────────────
@@ -109,7 +122,7 @@ const Auth = (() => {
 
     try {
       if (!sbSession?.user) {
-        _session = { id: '', name: '', role: '', email: '' };
+        _session = { id: '', name: '', role: '', email: '', dbUserId: null, adminId: null };
         if (typeof Profile !== 'undefined' && Profile.onSessionChanged) Profile.onSessionChanged(_session);
         if (typeof App !== 'undefined') App.updateNav();
         if (typeof Zones !== 'undefined') Zones.init();
@@ -125,7 +138,7 @@ const Auth = (() => {
       const confirmed = sbSession.user.email_confirmed_at;
       if (!confirmed) {
         await _sb.auth.signOut();
-        _session = { id: '', name: '', role: '', email: '' };
+        _session = { id: '', name: '', role: '', email: '', dbUserId: null, adminId: null };
         if (typeof Profile !== 'undefined' && Profile.onSessionChanged) Profile.onSessionChanged(_session);
         if (isExplicitLogin) {
           _goView('login');
@@ -137,8 +150,17 @@ const Auth = (() => {
 
       const role = await _fetchRole(sbSession.user);
       const name = sbSession.user.user_metadata?.full_name || sbSession.user.email?.split('@')[0] || 'Usuario';
-      
-      _session = { id: sbSession.user.id || '', name, role, email: sbSession.user.email };
+      const identity = await _syncDbIdentity(sbSession.user.email, name);
+      const normalizedRole = _normalizeRole(identity.adminRole || role);
+
+      _session = {
+        id: sbSession.user.id || '',
+        name,
+        role: normalizedRole,
+        email: sbSession.user.email,
+        dbUserId: identity.userId || null,
+        adminId: identity.adminId || null,
+      };
       if (typeof Profile !== 'undefined' && Profile.onSessionChanged) Profile.onSessionChanged(_session);
       
       closeModal();
@@ -240,7 +262,7 @@ const Auth = (() => {
     } catch(err) {
       console.warn('[Auth] Ignorando error al cerrar sesión:', err);
     }
-    _session = { id: '', name: '', role: '', email: '' };
+    _session = { id: '', name: '', role: '', email: '', dbUserId: null, adminId: null };
     window.location.reload();
   }
 
@@ -262,9 +284,12 @@ const Auth = (() => {
   // ── Inicialización ────────────────────────────────────────────────────────
   (async () => {
     try {
-      // Usar el SDK global cargado desde CDN (UMD build)
-      const { createClient } = window.supabase;
-      _sb = createClient('https://urumaghjardjgdveblxa.supabase.co', 'sb_publishable_hpITakDbpUWFx3Tv9AJg-A_MnyJOtd0');
+      _sb = typeof DB !== 'undefined' && DB.client ? DB.client() : null;
+      if (!_sb && window.supabase?.createClient) {
+        const { createClient } = window.supabase;
+        _sb = createClient('https://urumaghjardjgdveblxa.supabase.co', 'sb_publishable_hpITakDbpUWFx3Tv9AJg-A_MnyJOtd0');
+      }
+      if (!_sb) throw new Error('No se pudo inicializar Supabase.');
       _sbReady = true;
       _sb.auth.onAuthStateChange((event, session) => {
         // Evita ejecutar trabajo async pesado dentro del callback interno de Supabase.
